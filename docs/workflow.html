@@ -179,7 +179,7 @@
       <b>autonomously to <span class="mono">done</span></b>, pausing only for an architecture decision or a blocker.</p>
 
     <div class="ribbon" aria-label="Status state machine">
-      <div class="cap"><span class="eyebrow">Status state machine</span><span class="eyebrow">adjacent transitions only</span></div>
+      <div class="cap"><span class="eyebrow">Status state machine</span><span class="eyebrow">adjacent when forward-driven · reconcile settles directly</span></div>
       <div class="track">
         <span class="st">draft</span><span class="arrow">→</span>
         <span class="st">todo</span><span class="arrow">→</span>
@@ -192,7 +192,6 @@
       </div>
       <div class="terminals">
         <span class="eyebrow" style="align-self:center">terminal ·</span>
-        <span class="st run">running</span>
         <span class="st block">failed</span>
         <span class="st block">stalled</span>
         <span class="st block">blocked</span>
@@ -210,7 +209,7 @@
         <div class="pin">↻</div>
         <div class="card">
           <div class="row1"><h3>Start · validate + reconcile</h3><span class="knob">validate</span><span class="trans"><b>settles truth</b></span></div>
-          <p>First <b>validate the config</b> — <code>/crosscut validate</code> runs a whole-file check; errors or bad YAML halt before any plan is touched. Then reconcile: settle every plan's real status from the highest signal down — a <code>&lt;slug&gt;</code> merge commit, then <code>run.json</code>, then a live-process check — reclaim stale per-repo locks, and prune run records by retention.</p>
+          <p>First <b>validate the config</b> — <code>/crosscut validate</code> runs a whole-file check; errors or bad YAML halt before any plan is touched. Then reconcile: settle every plan's real status from the highest signal down — the newest <code>completed</code> run's <code>head_sha</code> reachable from the integration branch (covers a merge commit <em>and</em> a fast-forward), then <code>run.json</code>, then a live-process check — reclaim stale per-repo locks, and prune run records by retention.</p>
         </div>
       </div>
 
