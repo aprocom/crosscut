@@ -15,6 +15,15 @@ five-step track every time — like an assembly line for a piece of work:
 plan  →  validate  →  execute  →  accept  →  merge
 ```
 
+```mermaid
+flowchart LR
+    P["1 · Plan<br/>write & self-review"] --> V{"2 · Validate<br/>plan review"}
+    V --> E["3 · Execute<br/>coding agent on a worktree"]
+    E --> A{"4 · Accept<br/>tests + final review"}
+    A --> M["5 · Merge<br/>local, --no-ff"]
+    M --> D(["done"])
+```
+
 | Step | What happens | Plain English |
 |------|--------------|---------------|
 | **1. Plan** | Claude writes a detailed implementation plan into the repo, then reviews and improves its own plan. | "Here's exactly what I'm going to do, and I double-checked it." |
