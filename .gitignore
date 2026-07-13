@@ -1,0 +1,38 @@
+# Operator-supplied config (never ship a real one)
+crosscut.config.yaml
+# Exception: sanitized example config, safe to commit
+!docs/examples/**/crosscut.config.yaml
+
+# Caches / run state
+.cache/
+*-runs/
+*-venv/
+
+# Secrets
+.env
+.env.*
+*.token
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS / editors
+.DS_Store
+*.swp
+*~
+.vscode/
+.idea/
+docs/plans/reviews/
+
+# internal build scaffolding (never publish)
+.superpowers/
+
+# Private no-PII overlay: machine-/project-specific literal patterns.
+# Loaded by check-no-pii.sh in addition to the tracked pii-patterns.txt;
+# must never be published (that's the whole point).
+pii-patterns.local.txt

@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>/crosscut — workflow</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛰️</text></svg>">
+<style>
+  :root{
+    color-scheme: light dark;
+    --bg:#e9edf1; --grid:#dbe1e8;
+    --panel:#ffffff; --panel-2:#f4f7fa; --line:#d3dae2; --line-2:#c1cad4;
+    --ink:#161b22; --muted:#586372; --faint:#8a95a3;
+    --accent:#0c7d8c; --accent-ink:#ffffff; --accent-soft:#0c7d8c1a;
+    --done:#1a7f37; --run:#9a6700; --block:#cf222e; --term:#8250df;
+    --shadow:0 1px 2px #1b20270f, 0 8px 24px #1b202714;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0b0f14; --grid:#141b23;
+      --panel:#12181f; --panel-2:#161d26; --line:#232c37; --line-2:#2e3a47;
+      --ink:#e6edf3; --muted:#9aa7b4; --faint:#63707e;
+      --accent:#38bccd; --accent-ink:#03181b; --accent-soft:#38bccd1f;
+      --done:#3fb950; --run:#d29922; --block:#f85149; --term:#a371f7;
+      --shadow:0 1px 2px #0008, 0 12px 32px #0006;
+    }
+  }
+  :root[data-theme="light"]{
+    color-scheme:light;
+    --bg:#e9edf1; --grid:#dbe1e8; --panel:#ffffff; --panel-2:#f4f7fa; --line:#d3dae2; --line-2:#c1cad4;
+    --ink:#161b22; --muted:#586372; --faint:#8a95a3; --accent:#0c7d8c; --accent-ink:#ffffff; --accent-soft:#0c7d8c1a;
+    --done:#1a7f37; --run:#9a6700; --block:#cf222e; --term:#8250df; --shadow:0 1px 2px #1b20270f, 0 8px 24px #1b202714;
+  }
+  :root[data-theme="dark"]{
+    color-scheme:dark;
+    --bg:#0b0f14; --grid:#141b23; --panel:#12181f; --panel-2:#161d26; --line:#232c37; --line-2:#2e3a47;
+    --ink:#e6edf3; --muted:#9aa7b4; --faint:#63707e; --accent:#38bccd; --accent-ink:#03181b; --accent-soft:#38bccd1f;
+    --done:#3fb950; --run:#d29922; --block:#f85149; --term:#a371f7; --shadow:0 1px 2px #0008, 0 12px 32px #0006;
+  }
+
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans);
+    line-height:1.55; font-size:16px;
+    background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+    background-size:34px 34px; background-position:center top;
+  }
+  .wrap{max-width:1080px; margin:0 auto; padding:clamp(20px,5vw,56px) clamp(16px,4vw,40px) 72px}
+  a{color:var(--accent); text-decoration:none}
+  a:hover{text-decoration:underline}
+  ::selection{background:var(--accent); color:var(--accent-ink)}
+
+  .eyebrow{font-family:var(--mono); font-size:.72rem; letter-spacing:.16em; text-transform:uppercase; color:var(--muted)}
+  .mono{font-family:var(--mono)}
+
+  /* ---- header ---- */
+  header{position:relative; margin-bottom:clamp(28px,5vw,52px)}
+  .toprow{display:flex; justify-content:space-between; align-items:center; gap:16px; margin-bottom:26px}
+  .brand{display:flex; align-items:center; gap:10px; font-family:var(--mono); font-weight:600; letter-spacing:.02em}
+  .brand .dot{width:9px; height:9px; border-radius:50%; background:var(--accent); box-shadow:0 0 0 4px var(--accent-soft)}
+  .toggle{font-family:var(--mono); font-size:.72rem; letter-spacing:.08em; text-transform:uppercase; color:var(--muted);
+    background:var(--panel); border:1px solid var(--line); border-radius:999px; padding:7px 13px; cursor:pointer; box-shadow:var(--shadow)}
+  .toggle:hover{border-color:var(--accent); color:var(--ink)}
+  .toggle:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+
+  h1{font-family:var(--mono); font-weight:600; text-wrap:balance;
+    font-size:clamp(2.3rem,7vw,4.2rem); line-height:1.02; letter-spacing:-.01em; margin:.1em 0 .18em}
+  h1 .slash{color:var(--accent)}
+  .lede{font-size:clamp(1.02rem,2.3vw,1.28rem); color:var(--muted); max-width:60ch; margin:0}
+  .lede b{color:var(--ink); font-weight:600}
+  .pipeline-tag{font-family:var(--mono); color:var(--ink); font-weight:600}
+
+  /* ---- state ribbon ---- */
+  .ribbon{margin:30px 0 6px; border:1px solid var(--line); background:var(--panel); border-radius:14px; padding:16px 18px; box-shadow:var(--shadow)}
+  .ribbon .cap{display:flex; justify-content:space-between; align-items:baseline; gap:12px; margin-bottom:12px}
+  .track{display:flex; flex-wrap:wrap; align-items:center; gap:7px; overflow-x:auto}
+  .st{font-family:var(--mono); font-size:.76rem; padding:4px 9px; border-radius:6px; border:1px solid var(--line-2); color:var(--muted); white-space:nowrap; background:var(--panel-2)}
+  .st.on{color:var(--ink); border-color:var(--accent); background:var(--accent-soft)}
+  .arrow{color:var(--faint); font-family:var(--mono)}
+  .terminals{display:flex; flex-wrap:wrap; gap:7px; margin-top:12px; padding-top:12px; border-top:1px dashed var(--line)}
+  .st.done{color:var(--done); border-color:color-mix(in srgb,var(--done) 45%,var(--line))}
+  .st.run{color:var(--run); border-color:color-mix(in srgb,var(--run) 45%,var(--line))}
+  .st.block{color:var(--block); border-color:color-mix(in srgb,var(--block) 45%,var(--line))}
+  .st.term{color:var(--term); border-color:color-mix(in srgb,var(--term) 45%,var(--line))}
+
+  /* ---- section heads ---- */
+  .sec{margin-top:clamp(40px,7vw,68px)}
+  .sec-h{display:flex; align-items:baseline; gap:14px; margin-bottom:20px}
+  .sec-h h2{font-size:1.06rem; margin:0; font-weight:650; letter-spacing:.01em}
+  .sec-h .rule{flex:1; height:1px; background:var(--line)}
+
+  /* ---- pipeline ---- */
+  .flow{position:relative; margin-left:6px}
+  .flow::before{content:""; position:absolute; left:19px; top:8px; bottom:8px; width:2px;
+    background:linear-gradient(var(--accent),color-mix(in srgb,var(--accent) 30%,transparent))}
+  .node{position:relative; padding:0 0 22px 56px}
+  .node:last-child{padding-bottom:0}
+  .node .pin{position:absolute; left:8px; top:2px; width:24px; height:24px; border-radius:50%;
+    background:var(--panel); border:2px solid var(--accent); display:grid; place-items:center;
+    font-family:var(--mono); font-size:.66rem; font-weight:700; color:var(--accent); z-index:1}
+  .node.gate .pin{background:var(--accent); color:var(--accent-ink); box-shadow:0 0 0 5px var(--accent-soft)}
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:15px 17px; box-shadow:var(--shadow)}
+  .node.gate .card{border-color:var(--accent); border-left-width:3px}
+  .card .row1{display:flex; align-items:center; flex-wrap:wrap; gap:8px 12px; margin-bottom:7px}
+  .card h3{font-family:var(--mono); font-size:.95rem; margin:0; font-weight:650; letter-spacing:.01em}
+  .card p{margin:0; color:var(--muted); font-size:.92rem; max-width:64ch}
+  .card p code{font-family:var(--mono); font-size:.86em; background:var(--panel-2); border:1px solid var(--line); padding:.05em .4em; border-radius:5px; color:var(--ink); white-space:nowrap}
+  .gate-tag{font-family:var(--mono); font-size:.62rem; letter-spacing:.1em; text-transform:uppercase; color:var(--accent-ink);
+    background:var(--accent); padding:3px 8px; border-radius:999px}
+  .knob{font-family:var(--mono); font-size:.72rem; color:var(--ink); background:var(--accent-soft); border:1px solid color-mix(in srgb,var(--accent) 40%,var(--line)); padding:2px 8px; border-radius:999px}
+  .trans{font-family:var(--mono); font-size:.72rem; color:var(--faint); margin-left:auto}
+  .trans b{color:var(--muted); font-weight:500}
+
+  /* ---- two-gate + panels ---- */
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:16px}
+  .panel{background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px 20px; box-shadow:var(--shadow)}
+  .panel h4{margin:0 0 6px; font-family:var(--mono); font-size:.86rem; font-weight:650; display:flex; align-items:center; gap:9px}
+  .panel h4 .tick{width:7px; height:7px; border-radius:2px; background:var(--accent)}
+  .panel .sub{font-family:var(--mono); font-size:.68rem; letter-spacing:.08em; text-transform:uppercase; color:var(--faint)}
+  .panel p{margin:.5em 0 0; color:var(--muted); font-size:.92rem}
+  .panel p b{color:var(--ink); font-weight:600}
+
+  /* ---- control strip ---- */
+  .strip{display:grid; grid-template-columns:repeat(2,1fr); gap:12px}
+  .chip{display:flex; gap:12px; align-items:flex-start; background:var(--panel); border:1px solid var(--line); border-radius:11px; padding:13px 15px; box-shadow:var(--shadow)}
+  .chip .k{font-family:var(--mono); font-size:.68rem; letter-spacing:.09em; text-transform:uppercase; color:var(--accent); white-space:nowrap; padding-top:2px; min-width:96px}
+  .chip .v{color:var(--muted); font-size:.9rem}
+  .chip .v b{color:var(--ink); font-weight:600}
+  .chip .v code{font-family:var(--mono); font-size:.85em; color:var(--ink)}
+
+  /* ---- config panel ---- */
+  .term-panel{background:var(--panel); border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow); overflow:hidden}
+  .term-bar{display:flex; align-items:center; gap:8px; padding:10px 14px; border-bottom:1px solid var(--line); background:var(--panel-2)}
+  .term-bar .b{width:11px; height:11px; border-radius:50%; background:var(--line-2)}
+  .term-bar .path{font-family:var(--mono); font-size:.74rem; color:var(--muted); margin-left:6px}
+  pre{margin:0; padding:16px 18px; overflow-x:auto; font-family:var(--mono); font-size:.82rem; line-height:1.7; color:var(--ink)}
+  pre .k{color:var(--accent)}
+  pre .c{color:var(--faint)}
+  pre .s{color:var(--done)}
+
+  footer{margin-top:clamp(40px,7vw,64px); padding-top:22px; border-top:1px solid var(--line);
+    display:flex; flex-wrap:wrap; gap:10px 20px; justify-content:space-between; align-items:center;
+    font-family:var(--mono); font-size:.74rem; color:var(--faint)}
+  footer b{color:var(--muted); font-weight:500}
+
+  @media (max-width:640px){
+    body{background-size:26px 26px}
+    .grid2,.strip{grid-template-columns:1fr}
+    .trans{margin-left:0; width:100%}
+    .node{padding-left:48px}
+    .flow::before{left:15px}
+    .node .pin{left:4px}
+  }
+  @media (prefers-reduced-motion:no-preference){
+    .node{opacity:0; transform:translateY(8px); animation:rise .5s ease forwards}
+    .node:nth-child(1){animation-delay:.02s}.node:nth-child(2){animation-delay:.06s}
+    .node:nth-child(3){animation-delay:.1s}.node:nth-child(4){animation-delay:.14s}
+    .node:nth-child(5){animation-delay:.18s}.node:nth-child(6){animation-delay:.22s}
+    .node:nth-child(7){animation-delay:.26s}.node:nth-child(8){animation-delay:.3s}
+    @keyframes rise{to{opacity:1; transform:none}}
+  }
+</style>
+</head>
+<body>
+<main class="wrap">
+
+  <header>
+    <div class="toprow">
+      <div class="brand"><span class="dot"></span>crosscut</div>
+      <button class="toggle" id="themeBtn" type="button" aria-label="Toggle color theme">◐ theme</button>
+    </div>
+    <p class="eyebrow">Autonomous dev-orchestrator · config-driven</p>
+    <h1><span class="slash">/</span>crosscut</h1>
+    <p class="lede">One methodology drives a plan from idea to a merged commit —
+      <span class="pipeline-tag">plan → validate → execute → accept → merge</span> —
+      <b>autonomously to <span class="mono">done</span></b>, pausing only for an architecture decision or a blocker.</p>
+
+    <div class="ribbon" aria-label="Status state machine">
+      <div class="cap"><span class="eyebrow">Status state machine</span><span class="eyebrow">adjacent transitions only</span></div>
+      <div class="track">
+        <span class="st">draft</span><span class="arrow">→</span>
+        <span class="st">todo</span><span class="arrow">→</span>
+        <span class="st">validated</span><span class="arrow">→</span>
+        <span class="st">running</span><span class="arrow">→</span>
+        <span class="st">review_pending</span><span class="arrow">→</span>
+        <span class="st">accepted</span><span class="arrow">→</span>
+        <span class="st">merging</span><span class="arrow">→</span>
+        <span class="st on done">done</span>
+      </div>
+      <div class="terminals">
+        <span class="eyebrow" style="align-self:center">terminal ·</span>
+        <span class="st run">running</span>
+        <span class="st block">failed</span>
+        <span class="st block">stalled</span>
+        <span class="st block">blocked</span>
+        <span class="st term">rejected</span>
+        <span class="st term">superseded</span>
+      </div>
+    </div>
+  </header>
+
+  <section class="sec" aria-labelledby="pipe-h">
+    <div class="sec-h"><h2 id="pipe-h">The pipeline</h2><span class="rule"></span><span class="eyebrow">per plan · driven to done</span></div>
+
+    <div class="flow">
+      <div class="node">
+        <div class="pin">↻</div>
+        <div class="card">
+          <div class="row1"><h3>Start · validate + reconcile</h3><span class="knob">validate</span><span class="trans"><b>settles truth</b></span></div>
+          <p>First <b>validate the config</b> — <code>/crosscut validate</code> runs a whole-file check; errors or bad YAML halt before any plan is touched. Then reconcile: settle every plan's real status from the highest signal down — a <code>&lt;slug&gt;</code> merge commit, then <code>run.json</code>, then a live-process check — reclaim stale per-repo locks, and prune run records by retention.</p>
+        </div>
+      </div>
+
+      <div class="node">
+        <div class="pin">01</div>
+        <div class="card">
+          <div class="row1"><h3>Authoring</h3><span class="trans">→ <b>draft</b></span></div>
+          <p>Write the plan: frontmatter + code-first <code>### Task N</code> sections. A non-trivial architecture call spins up a research subagent first.</p>
+        </div>
+      </div>
+
+      <div class="node">
+        <div class="pin">02</div>
+        <div class="card">
+          <div class="row1"><h3>Self-review</h3><span class="trans"><b>draft</b> → <b>todo</b></span></div>
+          <p>Up to five improve cycles — completeness, ordering, no placeholders — and enforce the product boundary on <code>depends_on</code>. Always runs, no external tool.</p>
+        </div>
+      </div>
+
+      <div class="node gate">
+        <div class="pin">03</div>
+        <div class="card">
+          <div class="row1"><h3>Plan review</h3><span class="gate-tag">Gate · the plan</span><span class="knob">plan_review</span><span class="trans"><b>todo</b> → <b>validated</b></span></div>
+          <p>An independent read-only pass over the <b>plan</b>, before any code exists — <code>codex</code>, <code>claude</code>, or <code>none</code>. MUST-FIX findings loop back; the rest is applied.</p>
+        </div>
+      </div>
+
+      <div class="node">
+        <div class="pin">04</div>
+        <div class="card">
+          <div class="row1"><h3>Executor run</h3><span class="knob">executor</span><span class="trans"><b>validated</b> → <b>running</b></span></div>
+          <p>Build the plan on an isolated <code>&lt;slug&gt;</code> worktree — <code>ralphex</code> (Docker), <code>claude</code> (in-session), or <code>codex</code>. A per-repo lock keeps one executor per repo; different repos run in parallel.</p>
+        </div>
+      </div>
+
+      <div class="node gate">
+        <div class="pin">05</div>
+        <div class="card">
+          <div class="row1"><h3>Acceptance · 5a tests + 5b final review</h3><span class="gate-tag">Gate · the code</span><span class="knob">final_review</span><span class="trans">→ <b>accepted</b></span></div>
+          <p><b>5a</b> runs lint + tests and reads the actual output. <b>5b — final review</b> reviews the produced <b>code/diff</b> before merge — <code>in-session</code>, <code>claude</code>, <code>codex</code>, or <code>none</code>. A material finding is a blocker.</p>
+        </div>
+      </div>
+
+      <div class="node">
+        <div class="pin">06</div>
+        <div class="card">
+          <div class="row1"><h3>Finalize · merge</h3><span class="trans"><b>accepted</b> → <b>merging</b> → <b>done</b></span></div>
+          <p>Local merge (<code>--no-ff</code> by default), move the plan to <code>completed/</code>, set the ROADMAP to <code>done</code>, and prune the plan's run records. Push only when explicitly enabled.</p>
+        </div>
+      </div>
+
+      <div class="node">
+        <div class="pin">07</div>
+        <div class="card">
+          <div class="row1"><h3>Continue</h3><span class="knob">max_parallel</span><span class="trans"><b>loop</b> until backlog empty</span></div>
+          <p>Don't stop at one plan — drive every <code>ready</code> plan. Concurrent across repos, sequential within a repo; merges stay sequential per repo.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec" aria-labelledby="gates-h">
+    <div class="sec-h"><h2 id="gates-h">Two gates, two subjects</h2><span class="rule"></span><span class="eyebrow">neither substitutes for the other</span></div>
+    <div class="grid2">
+      <div class="panel">
+        <span class="sub">Phase 3</span>
+        <h4><span class="tick"></span>Plan review — the plan</h4>
+        <p>Reviews the <b>plan</b> <b>before</b> it is built. Catches a bad approach while it is still cheap to change. Read-only; feeds an apply / re-review loop.</p>
+      </div>
+      <div class="panel">
+        <span class="sub">Phase 5b</span>
+        <h4><span class="tick"></span>Final review — the code</h4>
+        <p>Reviews the produced <b>code</b> <b>before</b> it merges. The last gate; a <b>different</b> reviewer or model catches what the author rationalizes.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec" aria-labelledby="ctrl-h">
+    <div class="sec-h"><h2 id="ctrl-h">How it stays safe &amp; autonomous</h2><span class="rule"></span></div>
+    <div class="strip">
+      <div class="chip"><span class="k">Asks only on</span><span class="v"><b>Architecture decisions</b> and <b>blockers</b> — otherwise it runs to <code>done</code> without a go-ahead at each step.</span></div>
+      <div class="chip"><span class="k">Isolation</span><span class="v">Every run lands on its own <code>&lt;slug&gt;</code> worktree; the branch is the only deliverable until Phase 6.</span></div>
+      <div class="chip"><span class="k">Parallelism</span><span class="v">Parallel <b>across</b> repos, sequential <b>within</b> one — an atomic per-repo lock, optional <code>max_parallel</code> cap.</span></div>
+      <div class="chip"><span class="k">Git safety</span><span class="v">Never pushes unless enabled · merges <code>--no-ff</code> · <b>no <code>Co-Authored-By</code></b> trailer.</span></div>
+    </div>
+  </section>
+
+  <section class="sec" aria-labelledby="cfg-h">
+    <div class="sec-h"><h2 id="cfg-h">One config drives all of it</h2><span class="rule"></span><span class="eyebrow">~/.crosscut/crosscut.config.yaml</span></div>
+    <div class="term-panel">
+      <div class="term-bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="path">crosscut.config.yaml</span></div>
+<pre><span class="k">executor</span>: ralphex          <span class="c"># ralphex · claude · codex</span>
+<span class="k">plan_review</span>: codex         <span class="c"># reviews the PLAN  — codex · claude · none</span>
+<span class="k">final_review</span>: in-session   <span class="c"># reviews the CODE  — in-session · claude · codex · none</span>
+<span class="k">git</span>:
+  <span class="k">merge_ff</span>: <span class="s">false</span>          <span class="c"># --no-ff merges</span>
+  <span class="k">push_enabled</span>: <span class="s">false</span>      <span class="c"># local-merge-only, the safe default</span>
+<span class="k">knowledge_base</span>:
+  <span class="k">path</span>: ~/.crosscut/knowledge   <span class="c"># Obsidian-compatible</span>
+<span class="k">executor_options</span>:
+  <span class="k">runs_retention_days</span>: <span class="s">0</span>    <span class="c"># prune a plan's runs once it is done</span>
+  <span class="k">model</span>: inherit           <span class="c"># inherit · opus · sonnet · haiku · fable (claude) · or a codex model</span>
+  <span class="k">reasoning_effort</span>: inherit <span class="c"># inherit · low · medium · high · xhigh · max</span>
+<span class="k">repos</span>:
+  - <span class="k">name</span>: core            <span class="c"># grouped into products; boundaries enforced</span>
+    <span class="k">product</span>: platform</pre>
+    </div>
+  </section>
+
+  <footer>
+    <span><b>crosscut</b> — plan → validate → execute → accept → merge</span>
+    <span>config is the only source of truth</span>
+  </footer>
+
+</main>
+<script>
+  (function(){
+    var btn=document.getElementById('themeBtn'), root=document.documentElement;
+    btn.addEventListener('click',function(){
+      var cur=root.getAttribute('data-theme');
+      if(!cur){ cur = matchMedia('(prefers-color-scheme:dark)').matches ? 'dark' : 'light'; }
+      root.setAttribute('data-theme', cur==='dark' ? 'light' : 'dark');
+    });
+  })();
+</script>
+</body>
+</html>

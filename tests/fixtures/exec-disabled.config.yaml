@@ -1,0 +1,6 @@
+version: 1
+repos:
+  - name: backend
+    path: /path/to/backend
+    kind: python
+executor: bogus

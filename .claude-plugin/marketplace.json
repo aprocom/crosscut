@@ -1,0 +1,11 @@
+{
+  "name": "aprocom",
+  "owner": { "name": "aprocom" },
+  "plugins": [
+    {
+      "name": "crosscut",
+      "source": "./",
+      "description": "Claude Code plugin that drives one feature across one or many repos to a merged branch - plan, multi-model review, execute, test, merge."
+    }
+  ]
+}

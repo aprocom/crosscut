@@ -1,0 +1,16 @@
+# Forbidden patterns for the publication scrub gate (ERE, one per line).
+# Blank lines and #-comments are ignored. This file necessarily contains the
+# patterns it defines, so it is excluded from the scan.
+#
+# This TRACKED list holds only generic, non-identifying shape patterns — safe to
+# publish. Machine-/project-specific literals (which would themselves be a leak
+# if published) live in a private, git-ignored overlay that check-no-pii.sh loads
+# in addition to this file when present:
+#   - pii-patterns.local.txt  (next to this file), and/or
+#   - the file named by $CROSSCUT_PII_EXTRA
+# See CONTRIBUTING.md for the rationale.
+#
+# Note: 'aprocom' is the public GitHub org / marketplace owner (github.com/aprocom)
+# — intentionally public, so it is deliberately NOT scrubbed.
+/Users/[a-z]
+/home/[a-z]

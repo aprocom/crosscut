@@ -1,0 +1,7 @@
+{
+  "name": "crosscut",
+  "version": "0.2.0",
+  "description": "Claude Code plugin that drives one feature across one or many repos to a merged branch - plan, multi-model review, execute, test, merge.",
+  "license": "MIT",
+  "skills": ["skills/crosscut"]
+}

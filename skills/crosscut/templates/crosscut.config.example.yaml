@@ -1,0 +1,125 @@
+# crosscut.config.yaml — annotated schema reference.
+#
+# There is ONE config file, at a fixed global home:
+#   ~/.crosscut/crosscut.config.yaml
+# Resolution order (config.sh): $CROSSCUT_CONFIG (if set and present) → that home
+# file. There is NO upward search from the current directory. `workspace_root` is
+# always that home; `roadmap` is resolved relative to it. The knowledge base is
+# resolved separately (see `knowledge_base` below).
+#
+# You normally don't hand-write this file — run `/crosscut init` from inside each
+# repo and it create-or-updates this single config for you. This annotated copy is the
+# schema reference; it and docs/configuration.md must never disagree.
+version: 1
+language: en                            # orchestrator response language (init asks on first run)
+workspace_root: ~/.crosscut   # fixed: the crosscut home (the ROADMAP lives here)
+roadmap: ROADMAP.md                     # relative to workspace_root
+
+# Optional. Products are the integration boundary: feature groups, depends_on, and
+# integration-readiness are all scoped per product, never across. Product *membership*
+# is DERIVED from each repo's `product` field below — this top-level map does not define
+# it. Most keys here (e.g. `description`) are human-facing metadata, BUT
+# `products.<name>.knowledge_base` IS read by a script (`cfg_product_kb`): it overrides
+# the global `knowledge_base` (see below) for that product only.
+products:
+  platform:
+    description: "Python API + Node web, integrated together"
+    # Optional per-product knowledge-base override. Omit to inherit the global
+    # `knowledge_base`. A non-empty `mcp` wins over `path`; `path` is used verbatim.
+    # knowledge_base:
+    #   path: ~/vaults/platform        # this product's notes go here, as-is
+    #   mcp: ""                        # or an MCP endpoint (with `path` as fallback)
+
+repos:
+  - name: backend
+    path: /path/to/backend
+    kind: python             # python | nodejs | go | other
+    product: platform        # optional; defaults to `name` (a solo, single-repo product)
+    venv_isolation: true     # optional, python only
+    test_cmd: ".venv/bin/pytest -m 'not integration'"
+    lint_cmd: ".venv/bin/flake8"
+    plans_dir: docs/plans
+  - name: web
+    path: /path/to/web
+    kind: nodejs
+    product: platform        # same product as backend → they integrate together
+    test_cmd: "npx jest"
+    lint_cmd: "npx eslint src/"
+  - name: web-mono                 # a monorepo: one git repo, many packages
+    path: /path/to/web-mono
+    kind: nodejs
+    # no `product:` → solo product named "web-mono"
+    monorepo:
+      tool: nx                     # nx | lerna | pnpm | turbo
+      # {base} is substituted with the branch base ref (run.json base_sha, or
+      # git merge-base for a manual run). Acceptance runs build -> lint -> test.
+      affected_build: "npx nx affected -t build --base={base}"
+      affected_lint:  "npx nx affected -t lint  --base={base}"
+      affected_test:  "npx nx affected -t test  --base={base}"
+      # full-suite fallback when no base ref is available (first run / unknown)
+      full_build: "npx nx run-many -t build --all"
+      full_lint:  "npx nx run-many -t lint  --all"
+      full_test:  "npx nx run-many -t test  --all"
+
+# Executor (Phase 4) — scalar: which executor writes the code. One of `ralphex`
+# (default; Docker container), `claude` (in-session Claude Code subagent — no Docker/CLI
+# needed), or `codex` (`codex exec` in an orchestrator-managed worktree). There is no
+# enabled/disabled toggle — Phase 4 always runs the executor. Omit this line to accept
+# the default. Tune the run with executor_options.
+executor: ralphex
+executor_options:                  # optional; every key has a default
+  image: ghcr.io/umputun/ralphex:latest
+  idle_timeout: 10m
+  pre_run_hook: ""                 # optional host command run before the executor (best-effort)
+  mounts:                          # optional extra host mounts (src:dst)
+    - ~/.claude:/mnt/claude
+    - ~/.codex:/mnt/codex
+  venv_cache: ~/.cache/crosscut-venv
+  runs_dir: ~/.cache/crosscut-runs   # base of <runs_dir>/<repo>/<slug>/<run_id>/ run records
+  runs_retention_days: 0                # 0 = delete a plan's run records once it is `done`
+                                        # (pruned at Phase 6); >0 = keep them that many days,
+                                        # then an age-sweep at reconcile removes them. Failed/
+                                        # stalled runs are kept for diagnosis; a live run and a
+                                        # preserved codex `worktree` are never removed.
+  model: inherit                        # model for the `claude` executor subagent (opus/sonnet/…);
+                                        # inherit = orchestrator's model. Not wired for the codex executor.
+  reasoning_effort: inherit             # binds only via a Workflow dispatch (Agent tool has no effort
+                                        # knob); inherit = orchestrator's effort. See docs/configuration.md.
+
+# Plan review (Phase 3) — scalar: `codex` (default), `claude` (in-session subagent), or
+# `none`. `none` skips Phase 3
+# (status → validated + plan_review_skipped). With `codex`, if codex is unavailable or
+# its quota is exhausted on first use, Phase 3 degrades to validated + plan_review_skipped
+# — never a hard failure. Final review at Phase 5b (below) reviews the produced code and
+# runs unless final_review: none — it is separate from this plan review.
+plan_review: codex
+plan_review_options:               # optional
+  path_prepend: ""                 # optional PATH prefix (e.g. a node bin directory)
+  extra_args: "--sandbox read-only --skip-git-repo-check"
+  model: inherit                   # codex model when != inherit (else codex default)
+  reasoning_effort: inherit        # codex effort none|minimal|low|medium|high|xhigh; max clamps to xhigh
+
+# Final review (Phase 5b) — scalar: reviews the produced CODE/diff before merge.
+# `in-session` (default) = the orchestrator reviews it; `claude` = an independent
+# Agent-tool subagent (best objectivity — use a different model via final_review_options);
+# `codex` = external cross-model review; `none` = skip (drops the code-safety gate).
+final_review: in-session
+final_review_options:              # optional
+  model: inherit                   # claude alias (opus/…) or codex model, per the kind; inherit = default
+  reasoning_effort: inherit        # binds for codex + Workflow-dispatched claude; bare Agent inherits
+
+git:
+  push_enabled: false        # safe default; true -> allow push after merge
+  merge_ff: false            # --no-ff by default
+
+# Knowledge base — the durable, per-product store of outcomes (decisions/architecture/
+# research/incidents). ALWAYS present: there is no enabled toggle. This block is the
+# GLOBAL default every product inherits; override per product via
+# products.<name>.knowledge_base above. Plain Obsidian-compatible markdown (frontmatter,
+# [[wikilinks]], tags) that works with or without an Obsidian vault. Resolution: a
+# non-empty `mcp` (per-product first, else this global one) writes through that endpoint
+# with `path` as the on-disk fallback; otherwise notes are written under
+# <path>/<product>/{decisions,architecture,research,incidents}/. Paths are ~-expanded.
+knowledge_base:
+  path: ~/.crosscut/knowledge   # global base dir (default); per-product notes land under <path>/<product>/
+  mcp: ""                                 # optional MCP endpoint; when set, wins over path (with path as fallback)

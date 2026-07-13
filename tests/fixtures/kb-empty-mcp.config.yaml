@@ -1,0 +1,14 @@
+version: 1
+knowledge_base:
+  path: ~/kb-base
+  mcp: ""
+products:
+  delta:
+    knowledge_base:
+      mcp: ""
+      path: ~/kb/delta
+  epsilon:
+    knowledge_base: {}
+  theta:
+    knowledge_base:
+      path: ~/custom/theta-kb

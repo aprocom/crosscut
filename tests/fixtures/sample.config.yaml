@@ -1,0 +1,36 @@
+version: 1
+language: en
+workspace_root: /path/to/ws
+roadmap: docs/plans/ROADMAP.md
+repos:
+  - name: backend
+    path: /path/to/backend
+    kind: python
+    product: platform
+    venv_isolation: true
+    test_cmd: ".venv/bin/pytest -m 'not integration'"
+    lint_cmd: ".venv/bin/flake8"
+  - name: web
+    path: /path/to/web
+    kind: nodejs
+    test_cmd: "npx jest"
+    lint_cmd: "npx eslint src/"
+  - name: mono
+    path: /path/to/mono
+    kind: nodejs
+    product: platform
+    monorepo:
+      tool: nx
+      affected_test: "npx nx affected -t test --base={base}"
+      full_test: "npx nx run-many -t test --all"
+executor: ralphex
+executor_options:
+  image: ghcr.io/umputun/ralphex:latest
+  idle_timeout: 10m
+  mounts:
+    - "~/.claude:/mnt/claude"
+    - "~/.codex:/mnt/codex"
+plan_review: none
+git:
+  push_enabled: false
+  merge_ff: false

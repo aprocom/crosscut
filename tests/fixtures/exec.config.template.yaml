@@ -1,0 +1,13 @@
+version: 1
+language: en
+repos:
+  - name: backend
+    path: __BACKEND__
+    kind: python
+    venv_isolation: true
+executor: ralphex
+executor_options:
+  image: ghcr.io/umputun/ralphex:latest
+  idle_timeout: 10m
+  venv_cache: ~/.cache/crosscut-venv
+  runs_dir: ~/.cache/crosscut-runs

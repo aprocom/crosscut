@@ -1,0 +1,18 @@
+version: 1
+knowledge_base:
+  path: ~/kb-base
+  mcp: kb://global
+products:
+  alpha:
+    knowledge_base:
+      mcp: kb://alpha-mcp
+      path: ~/kb/alpha
+  beta:
+    knowledge_base:
+      path: ~/kb/beta-custom
+  gamma:
+    knowledge_base:
+      mcp: ""
+      path: ~/kb/gamma
+  iota:
+    knowledge_base: {}

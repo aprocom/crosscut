@@ -1,0 +1,97 @@
+# Sanitized example: three repos across two products — a `platform` product
+# (python `api` + nodejs `web`, integrated together) and a solo `web-mono` product
+# (a nodejs Nx monorepo). See README.md in this directory for how to use it.
+#
+# The real config lives at ONE fixed path, ~/.crosscut/crosscut.config.yaml,
+# built by running `/crosscut init` from inside each repo. `workspace_root` is always
+# that home; `roadmap` is relative to it. This file is an illustrative reference — every
+# /path/to/... value is a placeholder for a real absolute path.
+version: 1
+language: en
+workspace_root: ~/.crosscut
+roadmap: ROADMAP.md
+
+# Optional products map. Product *membership* is derived from the repos' `product`
+# fields below — this map does not define it. `description` is human-facing metadata,
+# but `products.<name>.knowledge_base` IS read by a script (`cfg_product_kb`) and
+# overrides the global `knowledge_base` (see below) for that product only.
+products:
+  platform:
+    description: "API + web front-end, shipped together"
+    # Optional per-product knowledge-base override (omit to inherit the global one):
+    # knowledge_base:
+    #   path: ~/vaults/platform   # notes for this product go here, verbatim
+    #   mcp: ""                   # or an MCP endpoint (with `path` as the fallback)
+  web-mono:
+    description: "Standalone Nx monorepo"
+
+repos:
+  - name: api
+    path: /path/to/api
+    kind: python
+    product: platform
+    venv_isolation: true
+    test_cmd: ".venv/bin/pytest -m 'not integration'"
+    lint_cmd: ".venv/bin/flake8"
+    plans_dir: docs/plans
+  - name: web
+    path: /path/to/web
+    kind: nodejs
+    product: platform
+    test_cmd: "npx jest"
+    lint_cmd: "npx eslint src/"
+    plans_dir: docs/plans
+  - name: web-mono                 # a monorepo: one git repo, many packages
+    path: /path/to/web-mono
+    kind: nodejs
+    # no `product:` → solo product named "web-mono"
+    monorepo:
+      tool: nx                     # nx | lerna | pnpm | turbo
+      # {base} is substituted with the branch base ref (run.json base_sha, or
+      # git merge-base for a manual run). Acceptance runs build -> lint -> test.
+      affected_build: "npx nx affected -t build --base={base}"
+      affected_lint:  "npx nx affected -t lint  --base={base}"
+      affected_test:  "npx nx affected -t test  --base={base}"
+      # full-suite fallback when no base ref is available (first run / unknown)
+      full_build: "npx nx run-many -t build --all"
+      full_lint:  "npx nx run-many -t lint  --all"
+      full_test:  "npx nx run-many -t test  --all"
+    plans_dir: docs/plans
+
+# Executor (Phase 4) — one of `ralphex` (default; needs Docker + the ralphex image),
+# `claude` (in-session subagent; no Docker/CLI), or `codex` (`codex exec` in a worktree).
+# Shown explicitly here for illustration — omitting the line accepts the default. There
+# is no enabled toggle.
+executor: ralphex
+executor_options:
+  image: ghcr.io/umputun/ralphex:latest
+  idle_timeout: 10m
+  pre_run_hook: ""
+  mounts:
+    - ~/.claude:/mnt/claude
+    - ~/.codex:/mnt/codex
+  venv_cache: ~/.cache/crosscut-venv
+  runs_dir: ~/.cache/crosscut-runs
+
+# Plan review (Phase 3). `codex` (default) runs a read-only review of the plan and needs
+# a `codex` CLI on PATH. Set to `none` to skip Phase 3 (→ validated + plan_review_skipped).
+# With `codex`, an unavailable CLI or an exhausted quota on first use degrades to
+# plan_review_skipped rather than failing the plan.
+plan_review: codex
+plan_review_options:
+  path_prepend: ""
+  extra_args: "--sandbox read-only --skip-git-repo-check"
+
+git:
+  push_enabled: false
+  merge_ff: false
+
+# Knowledge base — the durable, per-product store of outcomes (decisions/architecture/
+# research/incidents). Always present (no enabled toggle). This is the GLOBAL default;
+# override per product via products.<name>.knowledge_base above. Obsidian-compatible
+# markdown that works with or without a vault. A non-empty `mcp` writes through that
+# endpoint (with `path` as the on-disk fallback); otherwise notes go under
+# <path>/<product>/{decisions,architecture,research,incidents}/.
+knowledge_base:
+  path: ~/.crosscut/knowledge   # global base dir (default)
+  mcp: ""                                 # optional MCP endpoint; wins over path when set

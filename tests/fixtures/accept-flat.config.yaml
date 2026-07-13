@@ -1,0 +1,7 @@
+version: 1
+repos:
+  - name: api
+    path: /path/to/api
+    kind: python
+    lint_cmd: "echo LINT"
+    test_cmd: "echo TEST"
