@@ -39,7 +39,8 @@ the review to stay independent of the executor.
 
 ```bash
 export PATH="<plan_review_options.path_prepend>:$PATH"   # only if plan_review_options.path_prepend is set
-codex exec -C <repo.path> <plan_review_options.extra_args> "<prompt>" \
+codex exec -C <repo.path> <model/effort flags from plan_review_options> \
+  <plan_review_options.extra_args> "<prompt>" \
   < /dev/null \
   > <repo.path>/<plans_dir>/reviews/<slug>.codex.md 2>&1
 ```
@@ -55,8 +56,11 @@ Requirements, all load-bearing:
   always `<repo.path>/<plans_dir>/reviews/<slug>.codex.md`.
 - **`-C <repo.path>`** so `codex` reads that repo's own source and rules, not wherever
   the orchestrator session happens to be running from.
-- **Don't force a specific model** unless `plan_review_options.extra_args` explicitly
-  says to — respect whatever default the operator's `codex` account is configured for.
+- **Don't force a specific model or effort** unless the dedicated
+  `plan_review_options.model` / `plan_review_options.reasoning_effort` scalars say to —
+  while both are `inherit`, respect whatever default the operator's `codex` account is
+  configured for; a non-`inherit` value forces `-m <model>` /
+  `-c model_reasoning_effort=<v>` (with `max`→`xhigh`) and overrides that account default.
 - If a call appears to hang: no fresh session/transcript file appears under the tool's
   own session directory (`$CODEX_HOME/sessions/...`) after 2–3 minutes → kill it and
   retry once.

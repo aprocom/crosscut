@@ -19,7 +19,7 @@ plan  →  validate  →  execute  →  accept  →  merge
 |------|--------------|---------------|
 | **1. Plan** | Claude writes a detailed implementation plan into the repo, then reviews and improves its own plan. | "Here's exactly what I'm going to do, and I double-checked it." |
 | **2. Validate** *(optional)* | An outside tool reads the plan and gives a second opinion — it only reads, it doesn't change anything. | "A reviewer signed off before any code was written." |
-| **3. Execute** *(optional)* | A coding agent implements the plan in a safe, separate copy of your repo (a git *worktree*) and produces a branch of commits. | "The code got written on a side branch, not on your live files." |
+| **3. Execute** *(pluggable)* | A coding agent implements the plan in a safe, separate copy of your repo (a git *worktree*) and produces a branch of commits. | "The code got written on a side branch, not on your live files." |
 | **4. Accept** | Your lint and tests run, plus a review of the logic and design — not just a green test run. | "Tests and lint pass, and the approach holds up." |
 | **5. Merge** | The branch is merged into your integration branch **on your machine**, and the plan is filed as done. | "Merged locally and the paperwork is tidy." |
 
@@ -130,10 +130,11 @@ blocker.
 ## Is it safe?
 
 Short version: **the skill only ever writes code on an isolated side branch, never on
-your live files, and never pushes** — and the executor is a step you opt into. Read this
+your live files, and never pushes** — and the executor always runs, falling back to a
+*manual-run* you implement yourself if it can't run in your environment. Read this
 section before wiring it into a project you care about.
 
-- **The executor is opt-in, and can't run just anywhere.** Which coding agent runs is
+- **The executor always runs, but can't run just anywhere.** Which coding agent runs is
   your choice — `claude` (in-session, no extra tooling), `ralphex` (needs Docker), or
   `codex` (needs the `codex` CLI). If the one you picked can't run in your environment,
   driving a plan produces the plan and hands it to you to implement (a *manual-run*) —

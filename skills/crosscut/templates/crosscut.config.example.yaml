@@ -78,9 +78,10 @@ executor_options:                  # optional; every key has a default
   runs_dir: ~/.cache/crosscut-runs   # base of <runs_dir>/<repo>/<slug>/<run_id>/ run records
   runs_retention_days: 0                # 0 = delete a plan's run records once it is `done`
                                         # (pruned at Phase 6); >0 = keep them that many days,
-                                        # then an age-sweep at reconcile removes them. Failed/
-                                        # stalled runs are kept for diagnosis; a live run and a
-                                        # preserved codex `worktree` are never removed.
+                                        # then an age-sweep at reconcile removes them regardless
+                                        # of status — failed/stalled runs are not held for
+                                        # diagnosis — except runs that are young, live, or
+                                        # preserved (a non-terminal plan's newest completed run).
   model: inherit                        # model for the `claude` executor subagent (opus/sonnet/…);
                                         # inherit = orchestrator's model. Not wired for the codex executor.
   reasoning_effort: inherit             # binds only via a Workflow dispatch (Agent tool has no effort

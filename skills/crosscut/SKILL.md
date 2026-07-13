@@ -48,13 +48,15 @@ Paths and scripts referenced below are resolved at runtime, never hardcoded:
   [--preserve-file <f>]` age-prunes by `executor_options.runs_retention_days`, keeping any
   run that is young, live, or listed in `--preserve-file`. `reconcile.sh` **drives both**:
   event-prune at retention `0`, and a **status-aware sweep** at retention `>0` where it
-  passes each non-`done` plan's newest `completed` run in the preserve file so the merged/done
+  passes each non-terminal (not `done`/`rejected`/`superseded`) plan's newest `completed` run in the preserve file so the merged/done
   `head_sha` is never aged out. Only run-id dirs are ever removed (never a `worktree`
   sibling); `--dry-run` reports without deleting.
 - Reconcile / activation-settle (run, don't source): `${SCRIPT_DIR}/scripts/reconcile.sh` —
   the **one-call** reconcile that Start step 1 runs. Parses config + ROADMAP + git + run
   state (one YAML parse), settles every plan's status per § Reconcile below (which it
-  encodes), reclaims stale per-repo executor locks, event-prunes `done` plans' run records,
+  encodes), reclaims stale per-repo executor locks, event-prunes `done` plans' run records
+  (only at `runs_retention_days == 0`; at `>0` a status-aware age sweep runs instead, so
+  `done` plans age out via the sweep rather than being event-pruned),
   **writes the ROADMAP atomically**, and prints a JSON summary — keys `plans`,
   `status_counts_by_product`, `ready`, `running`, `blocked`, `stalled`, `changes_applied`,
   `warnings`, `focus_product`, `prune_results`. It is activation-settle **only**: it never
@@ -144,7 +146,10 @@ merging → done`; terminal/special: `failed`, `stalled`, `blocked`, `rejected`,
 `superseded`. Modifier flags: `plan_review_skipped` (set alongside `validated` when the
 plan_review module was disabled for that pass), `review_deferred` (set alongside `done`
 when a deferred plan_review-only pass is still owed — see `${SKILL_DIR}/LIFECYCLE.md`
-§ Quota handling). Transitions are **adjacent only** — never skip a state.
+§ Quota handling). Transitions are **adjacent only** when the orchestrator
+forward-drives a plan — never skip a state on that path; reconcile's
+activation-settle is the exception, settling directly to the truth-derived
+status (see § Reconcile).
 
 ## Reconcile at activation
 
@@ -195,9 +200,9 @@ Fact → outcome:
 - `status=running`, no live process, `run.json` missing or not finalized — **including no
   run records at all** (records wiped / cache cleared) → `stalled` + repair-gate (diagnose
   before resuming); never leave it falsely `running`.
-- Branch exists, worktree is gone → normal (the `<slug>` worktree is removed on
-  completion — by the adapter for `ralphex`/`codex`, by the orchestrator for `claude`)
-  — leave it alone.
+- Branch exists, worktree is gone → normal (the host `<slug>` worktree is removed on
+  completion — by the adapter for `codex`; `ralphex` works inside its own `--rm` container
+  and has no host worktree to remove; by the orchestrator for `claude`) — leave it alone.
 
 **Multi-run scan (parallel-aware, recency-ordered).** Because runs proceed concurrently
 across repos, reconcile scans **all** run directories across **every** repo — walk each
@@ -231,8 +236,8 @@ executor died is freed for its next `ready` plan (do this for every repo before 
   that still has run records — **not only** plans whose status *changed* to `done` this pass —
   via `prune-runs.sh --repo <name> --plan <slug>` (idempotent), so plans finished in a prior
   session are cleaned too.
-- **`>0`** — **status-aware age sweep**: reconcile computes the preserve-set (each non-`done`
-  plan's newest `completed` run dir — whose `head_sha` is the merged/done signal) and runs
+- **`>0`** — **status-aware age sweep**: reconcile computes the preserve-set (each non-terminal —
+  not `done`/`rejected`/`superseded` — plan's newest `completed` run dir, whose `head_sha` is the merged/done signal) and runs
   `prune-runs.sh --sweep --preserve-file <f>`, which ages out run dirs older than the window
   while keeping any that are young, live, or in that set. `done` plans are **not**
   event-pruned here — their records age out via the sweep like the rest.
@@ -288,12 +293,16 @@ leave half-delivered work silent.
   it reviews the produced *code* and is not substituted by `plan_review` (which reviews the
   *plan*). Setting `final_review: none` drops that code-safety gate deliberately.
 - **Per-stage model/reasoning:** `plan_review_options` / `final_review_options` /
-  `executor_options` carry `model` and `reasoning_effort` (default `inherit`). `model` binds
-  for claude subagents (Agent `model`) and codex kinds; `reasoning_effort` binds for codex
-  (mapped; `max`→`xhigh`) and for a claude stage dispatched via a Workflow — a bare
-  Agent-tool subagent has no effort knob and inherits the orchestrator's (advisory).
+  `executor_options` carry `model` and `reasoning_effort` (default `inherit`). For the codex
+  **plan_review / final_review** stages both map to codex flags (`model`≠`inherit` → `-m
+  <model>`; `reasoning_effort`≠`inherit` → `-c model_reasoning_effort=<v>`, `max`→`xhigh`).
+  For **claude** stages `model` binds via the Agent/subagent `model` (and `reasoning_effort`
+  binds only for a claude stage dispatched via a Workflow — a bare Agent-tool subagent has no
+  effort knob and inherits the orchestrator's, advisory). For the codex **executor** neither
+  binds here — you pass `model`/effort through `executor_options.codex_args` instead.
 - ROADMAP writes are atomic (temp file + rename); state transitions are adjacent
-  only — never skip a status.
+  only when the orchestrator forward-drives a plan — never skip a status (reconcile's
+  activation-settle excepted: it settles directly to the truth-derived value).
 - Irreversible actions (merge, launching the executor) run automatically once their
   Phase preconditions are met — preconditions are never skipped. The operator is
   asked only for an architecture decision or a genuine blocker.

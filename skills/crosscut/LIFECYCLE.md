@@ -374,12 +374,13 @@ Executor run records under `executor_options.runs_dir` are garbage-collected by
   `done` and the merged head are now the durable truth). `reconcile.sh` does the same
   catch-up at activation for any already-`done` plan that still has records.
 - **`>0` — keep N days (status-aware sweep).** At activation `reconcile.sh` runs a
-  status-aware age sweep: it computes each **non-`done`** plan's newest `completed` run dir
+  status-aware age sweep: it computes each **non-terminal** (not `done`/`rejected`/`superseded`) plan's newest `completed` run dir
   (its `head_sha` is the merged/done signal) and runs `prune-runs.sh --sweep --preserve-file
   <f>`, which ages out run dirs older than the window while preserving anything young, live,
   or in that preserve-set. A blind sweep would delete that newest-completed record and strand
-  the plan un-`done`; the preserve-file is what prevents it. `done` plans are **not**
-  event-pruned under `>0` — their records age out via the sweep too. Reconcile owns this: the
+  the plan un-`done`; the preserve-file is what prevents it. Terminal
+  (`done`/`rejected`/`superseded`) plans are **not** event-pruned under `>0` — their records
+  age out via the sweep too. Reconcile owns this: the
   preserve-set is reconcile-only knowledge (`prune-runs.sh --sweep` alone is status-blind).
 
 ```bash
@@ -390,7 +391,7 @@ ${SCRIPT_DIR}/scripts/prune-runs.sh --sweep --preserve-file <paths.txt>  # statu
 Only directories whose basename matches the run-id pattern `<UTCstamp>-<pid>` are ever
 deleted — a preserved codex `worktree` sibling and any other entry are always kept. A
 **live** run (`running.json`, no terminal `run.json`, PID alive) is never swept regardless
-of age, and neither is a run in the preserve-file. **Failed/stalled runs** of a non-`done`
+of age, and neither is a run in the preserve-file. **Failed/stalled runs** of a non-terminal (not `done`/`rejected`/`superseded`)
 plan age out under `>0` once past the window (only that plan's newest `completed` run is
 preserved), while at `0` they are kept until the plan is `done`. `--dry-run` (or
 `EXECUTOR_DRYRUN=1`) reports candidates without deleting. Retention pruning is never on a

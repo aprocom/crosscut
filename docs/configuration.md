@@ -64,7 +64,7 @@ Python traceback or, worse, running on silent defaults. Run it any time with
 
 ```bash
 bash <skill-dir>/scripts/config-validate.sh            # human report
-bash <skill-dir>/scripts/config-validate.sh --json     # {ok, errors, warnings}
+bash <skill-dir>/scripts/config-validate.sh --json     # {ok, errors, warnings} (+message on meta-errors)
 ```
 
 It is **standalone** (never calls `cfg_get`), so it can report a malformed file that the
@@ -84,10 +84,17 @@ readers themselves could not parse.
   pinned version like `opus-4.8` won't bind on the claude path (codex stages keep their own
   model namespace).
 
-The allowed-value sets and type rules are exactly the ones `config-mutate.sh` enforces on
-write, so anything the wizard writes always validates. **Exit codes:** `0` valid (warnings
+The wizard writes conservative defaults that pass validation, but `validate` performs
+additional enum/type checks that the wizard does not enforce (the `reasoning_effort` enum,
+the `model` tier-alias, the `repos[].kind` enum, and the `version` integer type — whereas
+`config-mutate.sh` passes `*_options` `KEY=VAL` entries through unvalidated and accepts any
+`--kind`), so a hand-edited config (or an injected option value) can still trip validation — as an
+**error** (a bad `version` type, or an out-of-range `reasoning_effort` on the *active* wired
+stage) or a **warning** (an unknown `repos[].kind`, a non-alias `model` on a `claude` stage, or a
+`reasoning_effort` on a non-binding stage such as the codex executor). **Exit codes:** `0` valid (warnings
 allowed) · `1` validation errors · `2` unparseable YAML · `3` no config file · `4` PyYAML
-missing. `--json` emits `{ok, errors, warnings}`; `--quiet` drops the success summary.
+missing. `--json` emits `{ok, errors, warnings}` (the meta-error exits `2`/`3`/`4` also add a
+`message` field and force `ok:false`, `warnings:[]`); `--quiet` drops the success summary.
 
 If your config is hand-editable and you break it, the readers (`config.sh`) also degrade
 gracefully now — a malformed YAML makes `cfg_get`/`cfg_check_depends` exit **2** with
@@ -195,15 +202,15 @@ itself (it reads config via the `cfg_*` shell functions, following the recipes i
 
 | key | type | default | read by |
 |---|---|---|---|
-| `version` | int | — (required) | schema marker; not read by any script or the orchestrator's logic today — reserved for future migrations |
+| `version` | int | — (optional; defaults to 1) | schema marker; read only by `config-validate.sh` (integer type-check), not by any runtime script or the orchestrator's logic today — reserved for future migrations |
 | `language` | string | `en` | orchestrator (`cfg_get language`) — sets the language of all responses to the operator; asked explicitly during `/crosscut init` |
 | `workspace_root` | string (abs path, `~` ok) | `~/.crosscut` (fixed — `init` always writes the home) | orchestrator — base for `roadmap`; it is the crosscut home, never a project directory (the knowledge base has its own base, `knowledge_base.path`) |
 | `roadmap` | string (relative to `workspace_root`) | `ROADMAP.md` (skeleton default) | orchestrator — locates the ROADMAP index at `<workspace_root>/<roadmap>` |
 | `products` | map: `<name>: {…}` (optional) | absent (product *membership* is derived from `repos[].product`) | product membership is **not** taken from here — the effective product set always comes from the repos' `product` fields (`cfg_products`). But `products.<name>.knowledge_base` **is script-read** (`cfg_product_kb` — see the row below and "Knowledge base" above); any other keys (descriptions, ownership) are human-facing metadata |
 | `products.<name>.knowledge_base` | map: `{ path, mcp }` (optional) | absent → this product uses the global `knowledge_base` | `config.sh` (`cfg_product_kb <product>`) — per-product override of the global knowledge base. A non-empty `path`/`mcp` here wins over the global one **for this product only**; `mcp` wins over `path`. A per-product `mcp: ""` (present-but-empty) is an explicit **opt-out** that forces the path form even when a global `mcp` is set — resolution is by `mcp`-key presence, not truthiness. See "Knowledge base" above for the full resolution and MCP contract |
 | `repos[].name` | string | — (required) | `run-executor.sh` (`--repo` is matched against it via `cfg_repo_field`); orchestrator (`cfg_repo_names`, ROADMAP `repo` field, plan-review recipe) |
-| `repos[].path` | string (abs path) | — (required) | `run-executor.sh` (`cfg_repo_field <name> path`, mounted into the executor container as `/project`); orchestrator (plan-review's `-C` flag, `test_cmd`/`lint_cmd` working directory) |
-| `repos[].kind` | string: `python \| nodejs \| go \| other` | — (required) | `discover-repos.sh` (detects and emits it); orchestrator, during `/crosscut init`, to pick the per-kind `test_cmd`/`lint_cmd` defaults below. Not read by `run-executor.sh` or `plan-review-limits.sh` |
+| `repos[].path` | string (abs path) | — (recommended; missing = warning) | `run-executor.sh` (`cfg_repo_field <name> path`, mounted into the executor container as `/project`); orchestrator (plan-review's `-C` flag, `test_cmd`/`lint_cmd` working directory) |
+| `repos[].kind` | string: `python \| nodejs \| go \| other` | — (recommended) | `discover-repos.sh` (detects and emits it); orchestrator, during `/crosscut init`, to pick the per-kind `test_cmd`/`lint_cmd` defaults below. Not read by `run-executor.sh` or `plan-review-limits.sh` |
 | `repos[].product` | string | the repo's own `name` (a solo, single-repo product) | orchestrator (`cfg_repo_product <name>`, `cfg_products`, `cfg_product_repos <product>`); `cfg_check_depends` (product-boundary enforcement) — a product is the integration boundary: `feature_id`, `depends_on`, and integration-readiness are all scoped per product, never across |
 | `repos[].venv_isolation` | bool | `false` | `run-executor.sh` (`cfg_repo_field <name> venv_isolation`) — when `true`, mounts `<executor_options.venv_cache>/<name>` at `/project/.venv` in the container instead of the host's own `.venv` |
 | `repos[].test_cmd` | string | — (per-kind default suggested at init; no runtime default) | orchestrator (Phase 5 acceptance: `cd <repo.path> && <test_cmd>`) — not read by any script |
@@ -217,7 +224,7 @@ itself (it reads config via the `cfg_*` shell functions, following the recipes i
 | `executor_options.mounts` | list of `"src:dst"` strings | `[]` | `run-executor.sh` (`cfg_list executor_options.mounts`) — extra `-v` mounts added to the `docker run` invocation, on top of the repo mount and the optional venv-cache mount |
 | `executor_options.venv_cache` | string (abs path, `~` expanded) | `~/.cache/crosscut-venv` | `run-executor.sh` (`cfg_get executor_options.venv_cache`) — host directory holding `<venv_cache>/<repo>`, mounted at `/project/.venv` when `venv_isolation: true` |
 | `executor_options.runs_dir` | string (abs path, `~` expanded) | `~/.cache/crosscut-runs` | `run-executor.sh` (`cfg_get executor_options.runs_dir`) — base of `<runs_dir>/<repo>/<slug>/<run_id>/` where `running.json`/`run.json`/logs are written. Written by `config-mutate.sh set-global --runs-dir <p>`; `/crosscut init` persists it from the first run |
-| `executor_options.runs_retention_days` | int (non-negative) | `0` | `prune-runs.sh` (`cfg_get executor_options.runs_retention_days`) — run-record retention, driven by `reconcile.sh` at activation. **`0`** = a plan's run records are deleted once it is `done` (event-pruned at Phase 6 / reconcile catch-up). **`>0`** = keep records that many days, then a **status-aware** age-sweep removes terminal run dirs older than the window while preserving each non-`done` plan's newest `completed` run (its produced head is the merged/done signal): reconcile computes that preserve-set and calls `prune-runs.sh --sweep --preserve-file <f>` (a status-blind `--sweep` alone would strand a plan un-`done`). Under `>0`, `done` plans' records age out via the sweep rather than being event-pruned at Phase 6. Only run-id dirs (`<UTCstamp>-<pid>`) are ever removed — a live run, a run in the preserve-file, and a codex `worktree` are never touched. Written by `config-mutate.sh set-global --runs-retention-days <n>` (validated as a non-negative integer — `0` allowed, negatives and non-numeric rejected) |
+| `executor_options.runs_retention_days` | int (non-negative) | `0` | `prune-runs.sh` (`cfg_get executor_options.runs_retention_days`) — run-record retention, driven by `reconcile.sh` at activation. **`0`** = a plan's run records are deleted once it is `done` (event-pruned at Phase 6 / reconcile catch-up). **`>0`** = keep records that many days, then a **status-aware** age-sweep removes old run-id dirs (non-live, non-preserved) older than the window while preserving each non-terminal (not `done`/`rejected`/`superseded`) plan's newest `completed` run (its produced head is the merged/done signal): reconcile computes that preserve-set and calls `prune-runs.sh --sweep --preserve-file <f>` (a status-blind `--sweep` alone would strand a plan un-`done`). Under `>0`, `done` plans' records age out via the sweep rather than being event-pruned at Phase 6. Only run-id dirs (`<UTCstamp>-<pid>`) are ever removed — a live run, a run in the preserve-file, and a codex `worktree` are never touched. Written by `config-mutate.sh set-global --runs-retention-days <n>` (validated as a non-negative integer — `0` allowed, negatives and non-numeric rejected) |
 | `executor_options.codex_args` | string (extra `codex exec` flags) | `--skip-git-repo-check` | `run-executor.sh` (`cfg_get executor_options.codex_args`, **`codex` executor only**) — word-split and appended to `codex exec -C <worktree> --sandbox workspace-write`; ignored by the `ralphex` and `claude` kinds |
 | `plan_review` | string (scalar): `codex \| claude \| none` | `codex` (what `/crosscut init` defaults to) | orchestrator (Phase 3 gate). Three kinds: `codex` (external read-only `codex exec`), `claude` (in-session read-only Claude Code subagent — no external account/quota), `none` (skip Phase 3 → `validated` + `plan_review_skipped`). `plan-review-limits.sh` (`cfg_get plan_review none`) is **`codex`-only** — it no-ops unless the value is exactly `codex`, so both `claude` and an absent key read as "limits n/a". When `codex` but the CLI is unavailable or its quota is exhausted **on first use**, Phase 3 degrades to `validated` + `plan_review_skipped` — never a hard fail. The Phase 5b **final review** (see `final_review`) reviews the produced *code* and runs for every executor run unless `final_review: none` — separate from this plan review |
 | `plan_review_options.path_prepend` | string (PATH prefix) | `""` (none) | orchestrator — prepended to `$PATH` before invoking `codex`, only if set; not read by any script |

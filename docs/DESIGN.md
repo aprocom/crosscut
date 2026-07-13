@@ -99,11 +99,12 @@ and no CLI. `run-executor.sh` therefore implements only the two external kinds; 
 - **per-stage model & reasoning effort** — `plan_review_options`, `final_review_options`,
   and `executor_options` each carry `model` and `reasoning_effort` (default `inherit`),
   so each stage can pick a tier (cheap/fast for mechanical work, strongest — or a
-  *different* model for cross-model independence — for judgment). `model` binds for claude
-  subagents (the Agent `model` param) and codex kinds; `reasoning_effort` binds for codex
-  (mapped to its flag; `max`→`xhigh`) and for a claude stage dispatched via a Workflow —
-  the Agent tool has no effort knob, so a bare Agent subagent inherits the orchestrator's
-  effort (the config value is advisory there). The keys are always written by init, so
+  *different* model for cross-model independence — for judgment). For the codex **plan_review / final_review** stages both `model` and `reasoning_effort`
+  bind (mapped to codex flags; `max`→`xhigh`), and `model` binds for claude subagents (the
+  Agent `model` param); for the codex **executor** neither binds — pass them through
+  `executor_options.codex_args`. `reasoning_effort` also binds for a claude stage dispatched
+  via a Workflow — the Agent tool has no effort knob, so a bare Agent subagent inherits the
+  orchestrator's effort (the config value is advisory there). The keys are always written by init, so
   model and reasoning type are recorded in the default config and are tunable.
 - **Plans** live at `<repo.path>/<plans_dir>/YYYYMMDD-slug.md`; completed
   plans move to `<plans_dir>/completed/`, rejected ones to
@@ -163,9 +164,10 @@ Format — a markdown table, one row per plan:
 
 "Ready" = `status=todo` and every entry in `depends_on` is `done`.
 
-At activation: scan every configured repo's `<plans_dir>` (including
-`completed/`, `rejected/`), seed/sync the ROADMAP with whatever plans
-already exist there. The ROADMAP is authoritative as an **index** (which
+At activation: reconcile settles the **existing** ROADMAP rows — parsing each
+row and probing `completed/`/`rejected/` for that row — and does **not**
+auto-discover or append missing plan files (new plans are added to the ROADMAP
+when authored, not auto-seeded here). The ROADMAP is authoritative as an **index** (which
 plans exist, their order, `depends_on`, `feature_id`), but **statuses** are
 always settled against git/`run.json` at activation (§3.2) rather than
 trusted; a plan's own frontmatter `status` field is optionally mirrored, not
@@ -217,8 +219,12 @@ failed → running             (after a fix, see "On failure" in §4)
 todo/validated → blocked|rejected|superseded
 blocked → (its prior status)  once the blocker clears
 ```
-Transitions are **adjacent only** — jumps (e.g. `running → done`, skipping
-acceptance) are never allowed. Every ROADMAP write is atomic (temp file +
+Transitions are **adjacent only** when the orchestrator **forward-drives** a
+plan — jumps (e.g. `running → done`, skipping acceptance) are never allowed on
+that path. Reconcile's activation-settle is the exception: as a repair/settle
+pass (not a forward transition) it may set the status **directly** to the
+truth-derived value per §3.2 (e.g. `running → done` when a merged head is
+reachable, or `todo → review_pending`). Every ROADMAP write is atomic (temp file +
 rename). Any status other than `done`/`rejected`/`superseded` with open work
 underneath it is a potential blocker for integration readiness (§13).
 
@@ -251,7 +257,7 @@ underneath it is a potential blocker for integration readiness (§13).
 | fact | action |
 |---|---|
 | the newest `completed` run's produced head (`run.json.head_sha`) is reachable from the integration branch, status ∉ {`done`,`blocked`,`superseded`,`rejected`}, **and no newer live run** | → `done` (auto) |
-| a newer **live** run exists (running.json, no terminal run.json, PID alive) | → `running` — a live executor outranks an older merged head; never `done` (so retention can't prune its live dir) |
+| a newer **live** run exists (running.json, no terminal run.json, PID alive), **status remappable** — excludes `accepted`/`merging` | → `running` — a live executor outranks an older merged head; never `done` (so retention can't prune its live dir). `accepted`/`merging` take the resume-Phase-6 path instead, so a false-live (reused-PID) run can't demote them |
 | status is a human `blocked`/`superseded` | leave unchanged — reconcile never auto-clears a human escalation |
 | `status=accepted`/`merging`, branch `<slug>` present, Phase 6 preconditions met | → resume Phase 6 finalize (idempotent re-merge/move/`done`); do **not** rerun the executor or infer `done` from bare branch reachability |
 | plan is in `completed/`, branch `<slug>` exists, **not** merged, **status before `accepted`** | → `review_pending` (executor finished, waiting on acceptance + merge) — **not** `done` (an `accepted`/`merging` plan takes the resume-Phase-6 row instead, which has precedence) |
@@ -487,21 +493,26 @@ Two files per run directory, written by `scripts/run-executor.sh`:
     `base_sha`, `head_sha`, `started_at`, `finished_at`, `exit_code`,
     `status`, `run_dir`. `base_sha` is the `<base>` value Phase 5 (§4)
     feeds to `scripts/acceptance.sh --base` for affected-mode resolution.
-  - If the process is interrupted (killed or a trapped signal) before it
-    finishes, the adapter's exit trap writes a smaller subset instead:
-    `run_id`, `repo`, `plan`, `branch`, `status`, `run_dir` — no
-    `base_sha`/`head_sha`/`exit_code`/timestamps in that path.
+  - On **any** unfinished exit before it completes, the adapter's exit trap
+    writes a smaller subset instead: `run_id`, `repo`, `plan`, `branch`,
+    `status`, `run_dir` — no `base_sha`/`head_sha`/`exit_code`/timestamps in
+    that path. The `status` is `failed` by default (the EXIT cleanup trap) and
+    `interrupted` only on a trapped INT/TERM signal — so a plain early failure
+    yields this same minimal subset with `status: failed`.
 
 `status` is one of exactly three values — `completed`, `failed`,
 `interrupted` (nothing else is valid) — computed **deterministically**
 (checked top to bottom) on the normal-completion path:
 1. `exit_code != 0` → `failed`;
 2. `exit_code == 0` and no new commits (`head_sha == base_sha`) → `failed`
-   (nothing was actually done);
+   (nothing was actually done) — on the codex path the comparison is against
+   this run's starting head (`RUN_BASE`), not the recorded `base_sha`, so a
+   codex no-op rerun on a pre-existing branch is `failed` even when
+   `head_sha != base_sha`;
 3. `exit_code == 0` and new commits exist → `completed`.
-The exit trap sets `status=interrupted` directly (see the subset above)
-when the process is killed/interrupted before the normal-completion path
-runs. (`stalled` is never read out of `run.json` — it comes from the
+The exit trap sets `status=interrupted` (rather than its default `failed`;
+see the subset above) only when the process is killed by a trapped INT/TERM
+signal before the normal-completion path runs. (`stalled` is never read out of `run.json` — it comes from the
 heartbeat against `running.json`, §5.3, or from reconcile finding an
 `interrupted` `run.json`, §3.2.)
 
@@ -516,7 +527,8 @@ executor's own config asks its internal step for structured output (that
 setting usually applies to the executor's inner agent loop, not its own
 top-level stdout). So the success criterion is **not** JSON parsing, it's:
 1. `exit_code == 0` (primary signal);
-2. branch `<slug>` has new commits (`head_sha != base_sha`);
+2. branch `<slug>` has new commits (`head_sha != base_sha` — on the codex path
+   the comparison is against this run's starting head `RUN_BASE`, not `base_sha`);
 3. (corroboration) the log tail contains success markers such as "all
    phases completed successfully", a timing/diff-stat summary line, or a
    "moved plan to .../completed/..." line.
@@ -571,7 +583,8 @@ Run the plan-review tool directly against the plan's `.md` file (not the
 executor's own review mode, which reviews a code diff, not a plan):
 ```
 export PATH="<plan_review_options.path_prepend>:$PATH"   # only if set
-codex exec -C <repo.path> <plan_review_options.extra_args> "<prompt>" \
+codex exec -C <repo.path> <model/effort flags from plan_review_options> \
+  <plan_review_options.extra_args> "<prompt>" \
   < /dev/null \
   > <repo.path>/<plans_dir>/reviews/<slug>.codex.md 2>&1
 ```
@@ -582,9 +595,12 @@ Required:
   unpredictable, and a relative redirect can land somewhere unexpected;
 - `-C <repo.path>` (or the tool's equivalent) so it reads that repo's
   own source and rules;
-- do not force a specific model unless `plan_review_options.extra_args` says to
-  — respect whatever default the operator's `codex` account is configured
-  for;
+- do not force a specific model or effort unless the dedicated
+  `plan_review_options.model` / `plan_review_options.reasoning_effort` scalars
+  say to — while both are `inherit`, respect whatever default the operator's
+  `codex` account is configured for; a non-`inherit` value forces `-m <model>` /
+  `-c model_reasoning_effort=<v>` (`max`→`xhigh`), sourced from those dedicated
+  scalars rather than `extra_args`, and overrides that account default;
 - check quota (§12) before every call; if a call appears to hang: no fresh
   session/transcript file appears in the tool's own session directory
   after 2–3 minutes → kill it and retry once;
@@ -714,7 +730,8 @@ contract). The model:
   precondition itself is never skipped, even though the phase runs
   unattended.
 - ROADMAP writes are atomic (temp file + rename); status transitions are
-  adjacent only (§3.1).
+  adjacent only when the orchestrator forward-drives a plan (§3.1; reconcile's
+  activation-settle settles directly to the truth-derived status).
 - Before merge: the integration branch and the run's worktree are both
   clean (`git status --porcelain` empty); the branch head is exactly what
   passed acceptance. After merge: run a minimal smoke check/tests already
@@ -764,9 +781,11 @@ contract). The model:
   (integer; **default unbounded** across repos) caps the total number of
   concurrent executors when the operator wants to bound load.
 - Stale executor locks are bounded by the lock's PID-liveness check plus
-  atomic reclaim (`rm -rf` then `mkdir`): a lock whose owner PID is no longer
-  alive is reclaimed by the next launcher, so a crashed run never wedges its
-  repo. The residual risk — PID reuse making a dead owner appear live — is
+  **capture-by-rename** reclaim: a lock whose owner PID is no longer alive is
+  `mv`'d aside by the next launcher, the moved copy's owner PID is
+  re-validated (restored intact if it turns out live), otherwise the
+  moved-aside copy is `rm`'d — a blind `rm -rf "$lock"` is explicitly
+  forbidden — so a crashed run never wedges its repo. The residual risk — PID reuse making a dead owner appear live — is
   mitigated by the owner token: release only removes a lock whose stored token
   matches, so a run never drops another owner's lock.
 - The 5-cycle self-review cap: if a plan doesn't stabilize in that budget,

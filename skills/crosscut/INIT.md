@@ -120,7 +120,7 @@ against `cfg_repo_names`. If it does, **do not silently re-interview**:
 **4. Persist and scaffold:**
 - **First run:** create `~/.crosscut/`, then materialize the ROADMAP at
   `~/.crosscut/<roadmap>` from `${SCRIPT_DIR}/templates/ROADMAP.template.md`
-  (if absent). The config file itself is created by the first `config-mutate.sh add-repo`
+  (if absent). The config file itself is created by the first `config-mutate.sh set-global`
   call below (it writes a skeleton with `workspace_root: ~/.crosscut` when the
   target is absent). Persist the global answers with
   `${SCRIPT_DIR}/scripts/config-mutate.sh set-global --language <l> --executor <e>
@@ -137,7 +137,7 @@ against `cfg_repo_names`. If it does, **do not silently re-interview**:
   runs dir to `~/.cache/crosscut-runs` and retention to `0`) so both are recorded from
   the start; `0` means a plan's run records are pruned once it is `done`; a positive value
   keeps records that many days, then `reconcile.sh` age-sweeps them (status-aware — each
-  non-`done` plan's newest `completed` run is preserved as the merged/done signal; see
+  non-terminal (not `done`/`rejected`/`superseded`) plan's newest `completed` run is preserved as the merged/done signal; see
   `${SKILL_DIR}/LIFECYCLE.md` § Runs retention). **Always persist `--final-review`
   (default `in-session`) and the `model` / `reasoning_effort` defaults (`inherit`)** for the
   plan_review / final_review / executor stages, so model and reasoning type are recorded in

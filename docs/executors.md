@@ -74,9 +74,10 @@ What it does for the `ralphex` (Docker) kind, in order:
    expanded to `$HOME`).
 4. Under `EXECUTOR_DRYRUN=1`, prints the assembled `docker run` command and exits
    here — none of the steps below run (see `EXECUTOR_DRYRUN` below).
-5. Creates a run directory `<executor_options.runs_dir>/<repo>/<slug>/<run_id>/`
-   (`<slug>` = the plan filename without `.md`; `<run_id>` =
-   `<UTC-timestamp>-<pid>`) and writes `running.json`.
+5. Acquires the per-repo executor lock; if the repo already has an active executor it
+   exits 1 without launching (see below). Otherwise it creates a run directory
+   `<executor_options.runs_dir>/<repo>/<slug>/<run_id>/` (`<slug>` = the plan filename
+   without `.md`; `<run_id>` = `<UTC-timestamp>-<pid>`) and writes `running.json`.
 6. Runs `executor_options.pre_run_hook` if configured — **best-effort**: on failure it
    logs a warning to stderr and the run continues regardless.
 7. Launches the container without an interactive TTY:
@@ -90,7 +91,8 @@ What it does for the `ralphex` (Docker) kind, in order:
 
 ### Dispatch and unimplemented-executor messages
 
-`run-executor.sh` exits 2 without launching anything in two cases:
+Past the usual argument/repo/plan validation, `run-executor.sh` also declines to launch in
+three dispatch cases — the first two exit 2, the third exits 1:
 
 - `executor: claude` — that kind is run in-session by the orchestrator, not here:
   ```
@@ -99,6 +101,11 @@ What it does for the `ralphex` (Docker) kind, in order:
 - any value that isn't `ralphex`, `codex`, or `claude` (a typo, an unsupported kind):
   ```
   executor kind '<x>' not implemented
+  ```
+- the repo already has an active executor — the per-repo executor lock is held, so the
+  run is skipped without launching anything (no run directory, container, or worktree):
+  ```
+  run-executor: repo '<name>' already has an active executor; skipping
   ```
 
 ### `EXECUTOR_DRYRUN`
@@ -125,12 +132,13 @@ in place of a container, drives `codex exec` against a **host git worktree**:
    already exists, else cutting a fresh branch off `base_sha` (the repo's current HEAD).
 2. Runs, without a TTY and with stdin closed (`< /dev/null`):
    ```
-   codex exec -C <worktree> --sandbox workspace-write <executor_options.codex_args> "<prompt>"
+   codex exec -C <worktree> --sandbox workspace-write <executor_options.codex_args> [extra args forwarded to run-executor.sh] "<prompt>"
    ```
    where the prompt instructs codex to implement the plan and commit its work.
 3. If codex left any uncommitted changes, commits them on `<slug>`
-   (`crosscut(codex): <slug>`), then removes the worktree (the branch persists) and
-   writes `run.json` exactly as the ralphex path does.
+   (`crosscut(codex): <slug>`), then removes the worktree on normal completion (the branch
+   persists — removed even if `codex exec` exited non-zero) and writes `run.json` exactly as
+   the ralphex path does; only an auto-commit failure preserves the worktree for recovery.
 
 Requirements:
 - The **`codex` CLI** must be installed and on `PATH` wherever `run-executor.sh` runs.
@@ -207,17 +215,18 @@ or was interrupted before it could finalize.
     "run_dir": "..."
   }
   ```
-- **Interrupted** (the adapter process itself was killed or received a trapped
-  signal — `EXIT`/`INT`/`TERM` — before the normal-completion path ran): the exit
-  trap writes a smaller subset instead — no `base_sha`, `head_sha`, `exit_code`, or
-  timestamps:
+- **Unfinished exit** (the adapter process reached its `EXIT` cleanup before the
+  normal-completion path ran — a deterministic command failure, or a killed/trapped
+  `INT`/`TERM` signal): the exit trap writes a smaller subset instead — no `base_sha`,
+  `head_sha`, `exit_code`, or timestamps — with status `failed` by default and
+  `interrupted` only when the run was killed by a trapped `INT`/`TERM` signal:
   ```json
   {
     "run_id": "...",
     "repo": "...",
     "plan": "...",
     "branch": "...",
-    "status": "interrupted",
+    "status": "failed",
     "run_dir": "..."
   }
   ```
@@ -229,6 +238,11 @@ valid. On the normal-completion path it's computed deterministically:
    was actually done).
 3. `exit_code == 0` and new commits exist → `completed`.
 
+For `codex`, the "no new commits" test in step 2 compares against *this run's* starting
+head (`RUN_BASE`), not `base_sha` — so a codex no-op rerun on a pre-existing branch is
+correctly `failed` even though `head_sha != base_sha`; `ralphex` compares against
+`base_sha`.
+
 The orchestrator maps this to the ROADMAP: `completed` → `review_pending`, `failed`
 → `failed`, `interrupted` → `stalled`. (`stalled` itself is never a `run.json`
 value — it comes from the heartbeat watching `executor.log` growth, or from
@@ -236,18 +250,22 @@ reconcile finding an `interrupted` `run.json`.)
 
 ### Reading the result
 
-The container's stdout is a human-readable progress log, not machine-parseable
-JSON — the success criterion is not JSON-parsing stdout, it's:
+The executor's stdout (`executor.log`) is a human-readable progress log, not
+machine-parseable JSON — the success criterion is not JSON-parsing stdout, it's:
 1. `exit_code == 0` (primary signal).
-2. Branch `<slug>` has new commits (`head_sha != base_sha`).
+2. Branch `<slug>` has new commits (`head_sha != base_sha` — for `codex`, against
+   this run's starting head `RUN_BASE`, not `base_sha`).
 3. (Corroboration only) the log tail contains a success marker such as "all phases
    completed successfully" or a "moved plan to .../completed/..." line.
 
 ## Finalization (orchestrator-owned)
 
 Finalization is uniform across all three kinds and **owned by the orchestrator**, not
-the executor. Each kind's only job is to produce commits on branch `<slug>` and remove
-its own worktree; **none of them merge**. The feature code stays on `<slug>` until Phase
+the executor. Each kind's only job is to produce commits on branch `<slug>`; the worktree is then
+cleaned up — `codex` removes its host worktree (the adapter), `ralphex` has no host
+worktree (it works inside its `--rm` container, torn down with the container), and the
+**orchestrator** removes the `claude` kind's worktree (its subagent doesn't clean up
+after itself); **none of them merge**. The feature code stays on `<slug>` until Phase
 6, where the orchestrator merges it locally and moves the plan file to
 `<plans_dir>/completed/` + updates the ROADMAP (see `SKILL.md`).
 
@@ -257,10 +275,12 @@ The one wrinkle is `ralphex`, which — as an optimization — **self-moves** th
 transition: Phase 6 still owns both. `codex` and `claude` do **not** self-move; Phase
 6's move step handles them and is idempotent for `ralphex` (an already-moved plan is
 treated as move-already-satisfied). So "the plan is under `completed/`" never by itself
-means the feature is merged — the real "done" signal is the newest `completed` run's
-produced head being reachable from the integration branch (`merge-base --is-ancestor`, via
-`run.json.head_sha`), covering both a `--no-ff` merge commit and a `git.merge_ff=true`
-fast-forward.
+means the feature is merged — for `ralphex`/`codex` runs the real "done" signal is the
+newest `completed` run's produced head being reachable from the integration branch
+(`merge-base --is-ancestor`, via `run.json.head_sha`), covering both a `--no-ff` merge
+commit and a `git.merge_ff=true` fast-forward. For `claude`/manual runs (which write no
+`run.json`/`head_sha`), reconcile instead relies on the ROADMAP `done` written before the
+branch is deleted (an idempotent finalize re-run), not `head_sha` reachability.
 
 ## Manual-run (implementing a plan by hand)
 
@@ -301,5 +321,5 @@ replacement honors the same interface:
   required.
 
 No other script or config key needs to change — the orchestrator's Phase 4 recipe in
-`SKILL.md` only shells out to `${SCRIPT_DIR}/scripts/run-executor.sh` and reads back
+`LIFECYCLE.md` only shells out to `${SCRIPT_DIR}/scripts/run-executor.sh` and reads back
 `run.json`.
