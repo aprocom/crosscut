@@ -24,6 +24,9 @@ flowchart LR
     M --> D(["done"])
 ```
 
+> **New here?** Start with the **[getting-started guide](docs/getting-started.md)** —
+> a ~10-minute, single-repo walkthrough from install to your first merged plan.
+
 | Step | What happens | Plain English |
 |------|--------------|---------------|
 | **1. Plan** | Claude writes a detailed implementation plan into the repo, then reviews and improves its own plan. | "Here's exactly what I'm going to do, and I double-checked it." |
@@ -224,6 +227,8 @@ own installer — not through this repo, and never automatically.
 
 ## Learn more
 
+- [`docs/getting-started.md`](docs/getting-started.md) — a ~10-minute walkthrough from install to your first merged plan.
+- [`docs/workflow.html`](docs/workflow.html) — a visual overview of the pipeline and how plans flow through it.
 - [`docs/DESIGN.md`](docs/DESIGN.md) — the full story of how and why the method works.
 - [`docs/configuration.md`](docs/configuration.md) — every option in `crosscut.config.yaml`.
 - [`docs/executors.md`](docs/executors.md) / [`docs/validators.md`](docs/validators.md) — how to plug in your own tools.
