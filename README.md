@@ -1,3 +1,12 @@
+<p align="center">
+  <img src="docs/assets/hero.png" width="820"
+       alt="An executor robot writes code in an isolated worktree while reviewers Codex and Fable check the plan and the result against quality gates.">
+</p>
+
+<p align="center"><em>In crosscut, the robots sweat over quality so you don't have to — an
+executor writes the code on an isolated worktree while Codex and Fable review the plan and
+the result at every gate. You just decide what to build next.</em></p>
+
 # crosscut
 
 Turn [Claude Code](https://claude.com/claude-code) into a hands-off project
