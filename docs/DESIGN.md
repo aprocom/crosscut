@@ -180,6 +180,27 @@ touches. Group semantics, recovery, and integration-readiness are in §13.
 
 ### 3.1 State machine (single source of truth)
 
+```mermaid
+stateDiagram-v2
+    [*] --> draft
+    draft --> todo: self-review
+    todo --> validated: plan review
+    validated --> running: executor
+    running --> review_pending: run completed
+    review_pending --> accepted: tests + final review
+    accepted --> merging
+    merging --> done
+    done --> [*]
+
+    running --> failed
+    running --> stalled
+    todo --> blocked
+    todo --> rejected
+    validated --> superseded
+```
+
+The forward-drive path is adjacent-only; reconcile's activation-settle may set a plan's status directly to the truth-derived value (§3.2).
+
 Full status enum (nothing outside this list is valid):
 `draft`, `todo`, `validated`, `running`, `stalled`, `review_pending`,
 `accepted`, `merging`, `done`, `failed`, `blocked`, `rejected`,
@@ -229,6 +250,20 @@ rename). Any status other than `done`/`rejected`/`superseded` with open work
 underneath it is a potential blocker for integration readiness (§13).
 
 ### 3.2 Reconcile at activation (deterministic)
+
+```mermaid
+flowchart TD
+    S["reconcile a plan"] --> Q1{"newest <b>completed</b> run's head_sha<br/>reachable from integration branch?<br/>(and no newer live run)"}
+    Q1 -->|yes| DONE(["done"])
+    Q1 -->|no| Q2{"newer live run?<br/>running.json, PID alive"}
+    Q2 -->|yes| RUN["running"]
+    Q2 -->|no| Q3{"newest terminal run.json"}
+    Q3 -->|completed| RP["review_pending"]
+    Q3 -->|failed| FAIL["failed"]
+    Q3 -->|interrupted / none| STALL["stalled"]
+```
+
+A human `blocked`/`superseded` is never auto-changed; an `accepted`/`merging` plan resumes Phase 6 instead (see the table below).
 
 **Truth priority** (highest wins on disagreement):
 1. The integration branch: **is the newest completed run's produced head reachable
