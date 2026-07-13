@@ -924,6 +924,24 @@ gated on operator approval:
 
 ## 13. Products, cross-repo features, recovery, and integration readiness
 
+```mermaid
+flowchart TB
+    subgraph PA["product: platform"]
+        direction TB
+        R1["repo: core"]
+        R2["repo: api"]
+        R2 -. "depends_on<br/>(same product only)" .-> R1
+    end
+    subgraph PB["product: web"]
+        R3["repo: frontend"]
+    end
+    PA ~~~ PB
+    classDef prod fill:transparent,stroke-dasharray:4 4
+    class PA,PB prod
+```
+
+*Integration readiness is computed **per product**; one blocked product never blocks another. A `depends_on` that crosses a product boundary is a blocker.*
+
 **The product is the integration boundary.** A *product* is a repo's
 `product` field, defaulting to its `name` when unset (so a solo repo is its
 own product). `cfg_products` lists the resolved product set;
