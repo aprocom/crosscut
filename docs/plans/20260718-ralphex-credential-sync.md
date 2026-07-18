@@ -120,6 +120,8 @@ crosscut запускает исполнителей **параллельно п
 
 ### Task 1: Функция подготовки кредов
 
+- [x] Add `ralphex_prepare_credentials()` to `skills/crosscut/scripts/run-executor.sh`
+
 **Files:**
 - Modify: `skills/crosscut/scripts/run-executor.sh`
 

@@ -124,6 +124,70 @@ EOF
   echo "$RUN_DIR/run.json"
 }
 
+# Prepare Claude credentials for the ralphex container.
+#
+# The ralphex image reads credentials from two places (see its /srv/init.sh):
+#   /mnt/claude/.credentials.json      — present on Linux, where Claude Code stores
+#                                        credentials as a file
+#   /mnt/claude-credentials.json       — the macOS path, where credentials live in the
+#                                        Keychain and must be extracted first
+#
+# Prints the path to mount at /mnt/claude-credentials.json, or nothing when the
+# platform needs no separate file. Never prints credential material.
+ralphex_prepare_credentials() {
+  local dest="$HOME/.claude/claude-credentials.json"
+
+  # Overridable so the platform branch stays testable on either OS (see Task 4).
+  case "${CROSSCUT_UNAME:-$(uname -s)}" in
+    Darwin)
+      command -v security >/dev/null 2>&1 || {
+        echo "run-executor: 'security' not found; cannot read the macOS Keychain" >&2
+        return 1
+      }
+      mkdir -p "$HOME/.claude"
+
+      # A unique temp file, not "$dest.tmp": runs proceed in parallel across repos, and
+      # a shared temp name means one run's mv steals another's write — or finds the file
+      # already gone. mktemp in the destination directory keeps the mv atomic.
+      local tmp
+      tmp="$(mktemp "$HOME/.claude/.claude-credentials.XXXXXX")" || {
+        echo "run-executor: cannot create a temp file in ~/.claude" >&2
+        return 1
+      }
+      # 600 before anything is written: a plain redirect would briefly leave the secret
+      # world-readable under the default umask 022.
+      chmod 600 "$tmp"
+
+      # Redirect stderr: a Keychain miss must not leak into logs beyond our own message.
+      if ! security find-generic-password -s "Claude Code-credentials" -w \
+           > "$tmp" 2>/dev/null; then
+        rm -f "$tmp"
+        echo "run-executor: no 'Claude Code-credentials' entry in the Keychain." >&2
+        echo "  Run 'claude /login' on the host, then retry." >&2
+        return 1
+      fi
+      # Guard against an empty read producing a valid-looking but useless file.
+      [ -s "$tmp" ] || {
+        rm -f "$tmp"
+        echo "run-executor: Keychain returned an empty credential." >&2
+        return 1
+      }
+      mv "$tmp" "$dest"
+      printf '%s\n' "$dest"
+      ;;
+    *)
+      # Linux and friends: Claude Code writes ~/.claude/.credentials.json directly,
+      # and the image picks it up from the /mnt/claude mount. No extra file needed.
+      [ -f "$HOME/.claude/.credentials.json" ] || {
+        echo "run-executor: ~/.claude/.credentials.json not found." >&2
+        echo "  Run 'claude /login' on the host, then retry." >&2
+        return 1
+      }
+      printf '\n'
+      ;;
+  esac
+}
+
 # ---- adapter: ralphex (Docker; reference path, unchanged) ----
 adapter_ralphex() {
   local IMAGE IDLE VENV_ISO VENV_CACHE PRE_HOOK VENV_KEY
