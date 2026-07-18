@@ -71,6 +71,12 @@ detected error pattern: "Not logged in"`. Из сообщения невозмо
 он общий механизм, не про креды. Пользователи, уже настроившие синхронизацию через хук
 и `mounts` вручную, не должны получить поломку или дублирование монтирований.
 
+**Тонкость с порядком.** Хук выполняется **после** `begin_run`, а авто-подготовка кредов —
+до него. Значит хук, который сам создаёт файл кредов, уже не успел бы спасти запуск, если
+бы авто-подготовка была безусловной: она упала бы раньше. Отсюда правило — **объявленное
+пользователем монтирование в credential-цель отключает авто-подготовку**. Конфиг, где
+креды готовит хук, продолжает работать ровно как раньше, а не ломается на ровном месте.
+
 ## Решения, зафиксированные заранее
 
 **Файл кредов не удаляется после прогона.** Соблазн сузить окно его существования есть, но
@@ -144,22 +150,34 @@ ralphex_prepare_credentials() {
         return 1
       }
       mkdir -p "$HOME/.claude"
+
+      # A unique temp file, not "$dest.tmp": runs proceed in parallel across repos, and
+      # a shared temp name means one run's mv steals another's write — or finds the file
+      # already gone. mktemp in the destination directory keeps the mv atomic.
+      local tmp
+      tmp="$(mktemp "$HOME/.claude/.claude-credentials.XXXXXX")" || {
+        echo "run-executor: cannot create a temp file in ~/.claude" >&2
+        return 1
+      }
+      # 600 before anything is written: a plain redirect would briefly leave the secret
+      # world-readable under the default umask 022.
+      chmod 600 "$tmp"
+
       # Redirect stderr: a Keychain miss must not leak into logs beyond our own message.
       if ! security find-generic-password -s "Claude Code-credentials" -w \
-           > "$dest.tmp" 2>/dev/null; then
-        rm -f "$dest.tmp"
+           > "$tmp" 2>/dev/null; then
+        rm -f "$tmp"
         echo "run-executor: no 'Claude Code-credentials' entry in the Keychain." >&2
         echo "  Run 'claude /login' on the host, then retry." >&2
         return 1
       fi
       # Guard against an empty read producing a valid-looking but useless file.
-      [ -s "$dest.tmp" ] || {
-        rm -f "$dest.tmp"
+      [ -s "$tmp" ] || {
+        rm -f "$tmp"
         echo "run-executor: Keychain returned an empty credential." >&2
         return 1
       }
-      chmod 600 "$dest.tmp"
-      mv "$dest.tmp" "$dest"
+      mv "$tmp" "$dest"
       printf '%s\n' "$dest"
       ;;
     *)
@@ -204,26 +222,51 @@ ralphex_prepare_credentials() {
 один и тот же target, а пользователь, уже настроивший креды вручную, задаст ровно те же
 цели.
 
+**Разделение «посчитать путь» и «создать файл».** Сборка команды обязана оставаться
+свободной от побочных эффектов: `EXECUTOR_DRYRUN=1` выходит **до** запуска контейнера, и
+если извлечение кредов встанет раньше этого выхода, сухой прогон начнёт лезть в Keychain и
+требовать реальную авторизацию. Существующие dry-run тесты (`tests/run-executor.bats`)
+сломаются, а сама идея «показать команду, ничего не делая» перестанет выполняться.
+
+Поэтому путь к файлу вычисляется **чисто** (`ralphex_credential_paths`), а материализация
+(`ralphex_prepare_credentials` из Task 1) вызывается **после** dry-run-выхода и **до**
+`begin_run`.
+
 ```bash
-  # Credential mounts come first; a user-declared mount to the same container path
-  # wins, so an existing manual setup keeps working unchanged.
-  local CRED_FILE=""
-  CRED_FILE="$(ralphex_prepare_credentials)" || return 1
+  # Pure: prints the mount specs credentials need, creating nothing. Safe under dry-run.
+  ralphex_credential_paths() {
+    printf '%s\n' "$HOME/.claude:/mnt/claude"
+    case "${CROSSCUT_UNAME:-$(uname -s)}" in
+      Darwin) printf '%s\n' "$HOME/.claude/claude-credentials.json:/mnt/claude-credentials.json" ;;
+    esac
+  }
+```
 
-  local -a MOUNT_SRC=("$HOME/.claude:/mnt/claude")
-  [ -n "$CRED_FILE" ] && MOUNT_SRC+=("$CRED_FILE:/mnt/claude-credentials.json")
+Сборка монтирований в `adapter_ralphex`:
 
+```bash
+  # Credential mounts go first so that a user-declared mount to the same container
+  # target overrides them: an existing manual setup keeps working unchanged.
+  local -a MOUNT_SRC=()
   while IFS= read -r m; do
     [ -n "$m" ] || continue
-    MOUNT_SRC+=("${m/#\~/$HOME}")
+    MOUNT_SRC+=("$m")
+  done < <(ralphex_credential_paths)
+
+  local -a USER_TARGETS=()
+  while IFS= read -r m; do
+    [ -n "$m" ] || continue
+    m="${m/#\~/$HOME}"
+    MOUNT_SRC+=("$m")
+    USER_TARGETS+=("$(mount_target "$m")")
   done < <(cfg_list executor_options.mounts)
 
-  # Deduplicate by container target (the second colon-separated field), last wins.
+  # Deduplicate by container target, last wins.
   local -a EXTRA_MOUNTS=()
   local -a SEEN_TARGETS=()
-  local i target dup
+  local i target dup t
   for (( i=${#MOUNT_SRC[@]}-1 ; i>=0 ; i-- )); do
-    target="$(printf '%s' "${MOUNT_SRC[$i]}" | cut -d: -f2)"
+    target="$(mount_target "${MOUNT_SRC[$i]}")"
     dup=0
     for t in ${SEEN_TARGETS[@]+"${SEEN_TARGETS[@]}"}; do
       [ "$t" = "$target" ] && { dup=1; break; }
@@ -237,8 +280,43 @@ ralphex_prepare_credentials() {
 Обход массива с конца нужен, чтобы при равных целях выигрывала **последняя** запись
 (пользовательская), а порядок остальных сохранился.
 
-Отказ `ralphex_prepare_credentials` останавливает прогон **до** `begin_run` — незачем
-заводить каталог прогона и `running.json` для запуска, который заведомо не состоится.
+Разбор цели вынести в функцию, потому что `cut -d: -f2` неверен для путей с двоеточием:
+
+```bash
+# Container target of a "src:target[:mode]" mount spec.
+#
+# Parsed from the RIGHT: a source path may itself contain a colon, but the trailing
+# mode (ro/rw) and the target never do. cut -d: -f2 would mis-parse such a path and
+# silently produce a wrong dedup key.
+mount_target() {
+  local spec="$1" last
+  last="${spec##*:}"
+  case "$last" in
+    ro|rw|z|Z|ro,z|rw,z) spec="${spec%:*}" ;;
+  esac
+  printf '%s\n' "${spec##*:}"
+}
+```
+
+**Материализация — только для реального запуска.** После блока dry-run и перед `begin_run`:
+
+```bash
+  # Only now, past the dry-run exit: preparing credentials is a side effect and must
+  # not happen while merely printing the command.
+  #
+  # Skipped when the user declares their own mount at the credential target: their
+  # setup (often a pre_run_hook that writes that file) owns the credentials, and
+  # demanding ours on top would break a config that works today.
+  if ! target_declared "/mnt/claude-credentials.json" ${USER_TARGETS[@]+"${USER_TARGETS[@]}"} \
+     && ! target_declared "/mnt/claude" ${USER_TARGETS[@]+"${USER_TARGETS[@]}"}; then
+    ralphex_prepare_credentials >/dev/null || return 1
+  fi
+```
+
+где `target_declared <needle> [targets...]` возвращает 0, если цель есть в списке.
+
+Отказ подготовки останавливает прогон **до** `begin_run` — незачем заводить каталог
+прогона и `running.json` для запуска, который заведомо не состоится.
 
 ---
 
@@ -248,6 +326,9 @@ ralphex_prepare_credentials() {
 - Modify: `skills/crosscut/templates/crosscut.config.example.yaml`
 - Modify: `docs/executors.md`
 - Modify: `docs/getting-started.md`
+- Modify: `docs/configuration.md` — в описании `executor_options.mounts` отметить, что для
+  `ralphex` монтирования кредов добавляются автоматически, а объявленное пользователем
+  монтирование в ту же цель их перекрывает и отключает авто-подготовку
 
 В примере конфига — в комментарии к `executor_options.mounts` указать, что для `ralphex`
 монтирования кредов добавляются **автоматически** и перечислять их вручную не требуется;
@@ -273,6 +354,8 @@ Docker и выполненный `claude /login`.
 
 **Files:**
 - Create: `tests/ralphex-credentials.bats`
+- Modify: `tests/run-executor.bats` — обновить ожидания существующих ralphex dry-run кейсов
+  под новые монтирования кредов и выставить в них `CROSSCUT_UNAME`
 
 По образцу существующих bats-тестов. Docker при этом **не запускается** — проверяется
 формирование команды через уже существующий режим, включаемый переменной окружения
@@ -280,11 +363,19 @@ Docker и выполненный `claude /login`.
 именно `EXECUTOR_DRYRUN`). Режим печатает команду и выходит **до** `begin_run`, поэтому
 по факту создания каталога прогона можно отличить «упало до запуска» от «запустилось».
 
-**Подготовка окружения для случаев 1–3.** Все три доходят до печати команды, а значит
-подготовка кредов должна отработать успешно. На Linux-раннере это означает, что в
-подменённом `HOME` обязан лежать `~/.claude/.credentials.json` — иначе тест упадёт по
-ветке «кредов нет» и проверит совсем не то, что задумано. Создавать файл-пустышку в
-`setup()`.
+**Подготовка окружения.** Dry-run по новому дизайну **не** трогает креды — команда
+собирается из чистого `ralphex_credential_paths`. Но платформа всё равно влияет на состав
+монтирований (на Darwin добавляется второе), поэтому **каждый** тест обязан выставлять
+`CROSSCUT_UNAME` явно. Без этого набор монтирований будет разным на машине разработчика и
+на CI, и тест начнёт то падать, то проходить в зависимости от того, где запущен.
+
+`setup()` создаёт временный `HOME` и в нём `~/.claude/.credentials.json`-пустышку — она
+нужна тестам, доходящим до материализации, и не мешает остальным.
+
+**Регрессия существующих тестов.** `tests/run-executor.bats` уже содержит dry-run проверки
+ralphex (в том числе на точный состав `docker run`). Новые монтирования кредов изменят
+ожидаемую команду. Эти тесты **обязаны быть обновлены в рамках этой задачи**, а не
+оставлены падать: пройтись по всем ralphex-кейсам в файле и дополнить ожидания.
 
 Случаи:
 
@@ -294,13 +385,26 @@ Docker и выполненный `claude /login`.
 2. **Дефолт без конфига.** `mounts` пуст — в команде присутствует `-v <...>:/mnt/claude`.
 3. **Дополнительные монтирования сохраняются.** `mounts` содержит
    `~/.gitconfig:/home/app/.gitconfig:ro` — оно есть в команде вместе с кредами.
-4. **Отсутствие кредов останавливает прогон.** Подменить `HOME` на пустой каталог **без**
-   файла кредов → ненулевой код возврата, сообщение содержит `claude /login`, каталог
-   прогона **не создан**.
+4. **Отсутствие кредов останавливает прогон.** `CROSSCUT_UNAME=Linux`, `HOME` — пустой
+   каталог **без** файла кредов, **без** `EXECUTOR_DRYRUN` → ненулевой код возврата,
+   сообщение содержит `claude /login`, каталог прогона **не создан**.
 5. **Секреты не в выводе.** Записать в файл кредов заведомую строку-маркер и убедиться, что
-   она не встречается ни в stdout, ни в stderr при `EXECUTOR_DRYRUN=1`.
+   она не встречается ни в stdout, ни в stderr.
+6. **Dry-run ничего не создаёт.** `CROSSCUT_UNAME=Darwin`, `security` подменён заглушкой,
+   `EXECUTOR_DRYRUN=1` → команда напечатана, заглушка **не вызывалась**, файла
+   `~/.claude/claude-credentials.json` не появилось. Это и есть проверка, что сборка
+   команды осталась без побочных эффектов.
+7. **Пользовательские креды отключают авто-подготовку.** `mounts` содержит
+   `/tmp/mycreds:/mnt/claude-credentials.json`, `CROSSCUT_UNAME=Darwin`, `security`
+   подменён заглушкой → прогон не требует Keychain, заглушка не вызывалась, в команде
+   стоит пользовательский источник.
+8. **Darwin-ветка извлекает и защищает.** `CROSSCUT_UNAME=Darwin`, заглушка `security`
+   печатает маркер, без dry-run → файл создан с правами `600`, маркера нет ни в stdout,
+   ни в stderr.
+9. **Путь с двоеточием разбирается верно.** `mount_target '/tmp/a:b/c:/mnt/x:ro'` даёт
+   `/mnt/x` — проверка, что разбор идёт справа, а не через `cut -d: -f2`.
 
-Тест 5 — не формальность: это единственная проверка, которая поймает случайное
+Тесты 5 и 8 — не формальность: это единственные проверки, которые поймают случайное
 `echo "$CRED_FILE_CONTENTS"` при будущих правках.
 
 **Платформенная ветка.** Keychain на Linux-CI не воспроизвести, поэтому ветвление берёт
