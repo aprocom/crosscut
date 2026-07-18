@@ -120,6 +120,8 @@ crosscut запускает исполнителей **параллельно п
 
 ### Task 1: Функция подготовки кредов
 
+- [x] Add `ralphex_prepare_credentials()` to `skills/crosscut/scripts/run-executor.sh`
+
 **Files:**
 - Modify: `skills/crosscut/scripts/run-executor.sh`
 
@@ -200,6 +202,11 @@ ralphex_prepare_credentials() {
 ---
 
 ### Task 2: Подключение к adapter_ralphex с дедупликацией
+
+- [x] Add `mount_target()` and `target_declared()` helper functions
+- [x] Add `ralphex_credential_paths()` pure function
+- [x] Modify `adapter_ralphex` to use credential mounts with deduplication
+- [x] Call `ralphex_prepare_credentials` after dry-run exit and before `begin_run` only when needed
 
 **Files:**
 - Modify: `skills/crosscut/scripts/run-executor.sh` — функция `adapter_ralphex`
@@ -351,6 +358,11 @@ target_declared() {
 
 ### Task 3: Пример конфига и документация
 
+- [x] Update `skills/crosscut/templates/crosscut.config.example.yaml` with credential auto-mount note
+- [x] Update `docs/executors.md` with credentials subsection for ralphex
+- [x] Update `docs/getting-started.md` with `claude /login` prerequisite
+- [x] Update `docs/configuration.md` with auto-mount note for `executor_options.mounts`
+
 **Files:**
 - Modify: `skills/crosscut/templates/crosscut.config.example.yaml`
 - Modify: `docs/executors.md`
@@ -380,6 +392,9 @@ Docker и выполненный `claude /login`.
 ---
 
 ### Task 4: Тесты
+
+- [x] Create `tests/ralphex-credentials.bats` with all 9 test cases
+- [x] Update existing ralphex dry-run tests in `tests/run-executor.bats` with credential mount expectations
 
 **Files:**
 - Create: `tests/ralphex-credentials.bats`

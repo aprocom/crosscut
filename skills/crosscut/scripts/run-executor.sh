@@ -124,6 +124,98 @@ EOF
   echo "$RUN_DIR/run.json"
 }
 
+# Container target of a "src:target[:options]" mount spec.
+#
+# The second colon-separated field. executor_options.mounts is documented as
+# "src:target[:options]", and within that format -v splits on colons into two or three
+# fields — so a source path containing a colon is not expressible at all (that is what
+# --mount exists for) and field 2 is unambiguously the target.
+#
+# Scope note: this does NOT hold for every -v form docker accepts. "-v /container/cache"
+# declares an anonymous volume whose target is field 1. crosscut does not support that
+# form in executor_options.mounts; if it ever does, this function must be revisited.
+mount_target() {
+  printf '%s\n' "$1" | cut -d: -f2
+}
+
+# 0 when <needle> is among the remaining arguments.
+#
+# set -u safe by contract: callers pass arrays as ${arr[@]+"${arr[@]}"}, so an empty
+# array expands to no arguments at all rather than to an empty string.
+target_declared() {
+  local needle="$1"
+  shift
+  local t
+  for t in "$@"; do
+    [ "$t" = "$needle" ] && return 0
+  done
+  return 1
+}
+
+# Prepare Claude credentials for the ralphex container.
+#
+# The ralphex image reads credentials from two places (see its /srv/init.sh):
+#   /mnt/claude/.credentials.json      — present on Linux, where Claude Code stores
+#                                        credentials as a file
+#   /mnt/claude-credentials.json       — the macOS path, where credentials live in the
+#                                        Keychain and must be extracted first
+#
+# Prints nothing on success: mount paths are assembled by the caller, which decides
+# from NEEDS_CRED_PREP whether this function has to run at all. Returns non-zero when
+# credentials cannot be prepared, explaining why on stderr. Never prints credential
+# material on any path.
+ralphex_prepare_credentials() {
+  local dest="$HOME/.claude/claude-credentials.json"
+
+  # Overridable so the platform branch stays testable on either OS (see Task 4).
+  case "${CROSSCUT_UNAME:-$(uname -s)}" in
+    Darwin)
+      command -v security >/dev/null 2>&1 || {
+        echo "run-executor: 'security' not found; cannot read the macOS Keychain" >&2
+        return 1
+      }
+      mkdir -p "$HOME/.claude"
+
+      # A unique temp file, not "$dest.tmp": runs proceed in parallel across repos, and
+      # a shared temp name means one run's mv steals another's write — or finds the file
+      # already gone. mktemp in the destination directory keeps the mv atomic.
+      local tmp
+      tmp="$(mktemp "$HOME/.claude/.claude-credentials.XXXXXX")" || {
+        echo "run-executor: cannot create a temp file in ~/.claude" >&2
+        return 1
+      }
+      # 600 before anything is written: a plain redirect would briefly leave the secret
+      # world-readable under the default umask 022.
+      chmod 600 "$tmp" || { rm -f "$tmp"; echo "run-executor: cannot set permissions on temp file" >&2; return 1; }
+
+      # Redirect stderr: a Keychain miss must not leak into logs beyond our own message.
+      if ! security find-generic-password -s "Claude Code-credentials" -w \
+           > "$tmp" 2>/dev/null; then
+        rm -f "$tmp"
+        echo "run-executor: no 'Claude Code-credentials' entry in the Keychain." >&2
+        echo "  Run 'claude /login' on the host, then retry." >&2
+        return 1
+      fi
+      # Guard against an empty read producing a valid-looking but useless file.
+      [ -s "$tmp" ] || {
+        rm -f "$tmp"
+        echo "run-executor: Keychain returned an empty credential." >&2
+        return 1
+      }
+      mv "$tmp" "$dest"
+      ;;
+    *)
+      # Linux and friends: Claude Code writes ~/.claude/.credentials.json directly,
+      # and the image picks it up from the /mnt/claude mount. No extra file needed.
+      [ -f "$HOME/.claude/.credentials.json" ] || {
+        echo "run-executor: ~/.claude/.credentials.json not found." >&2
+        echo "  Run 'claude /login' on the host, then retry." >&2
+        return 1
+      }
+      ;;
+  esac
+}
+
 # ---- adapter: ralphex (Docker; reference path, unchanged) ----
 adapter_ralphex() {
   local IMAGE IDLE VENV_ISO VENV_CACHE PRE_HOOK VENV_KEY
@@ -142,13 +234,39 @@ adapter_ralphex() {
     VENV_MOUNT=(-v "$VENV_CACHE/$VENV_KEY":/project/.venv)
   fi
 
-  # Assemble config-declared extra mounts (executor_options.mounts is a YAML list of "src:dst").
-  local EXTRA_MOUNTS=()
+  # Collect user mounts first so credential mounts can defer to any user-declared target.
+  local -a USER_MOUNTS=()
+  local -a USER_TARGETS=()
   while IFS= read -r m; do
     [ -n "$m" ] || continue
     m="${m/#\~/$HOME}"
-    EXTRA_MOUNTS+=(-v "$m")
+    USER_MOUNTS+=(-v "$m")
+    USER_TARGETS+=("$(mount_target "$m")")
   done < <(cfg_list executor_options.mounts)
+
+  # Add credential mounts only when the user has not claimed the same container target.
+  # NEEDS_CRED_PREP=1 when the platform-specific credential target was not overridden,
+  # meaning we own that mount and must prepare the credential file before the run.
+  local -a CRED_MOUNTS=()
+  local NEEDS_CRED_PREP=0
+  case "${CROSSCUT_UNAME:-$(uname -s)}" in
+    Darwin)
+      target_declared "/mnt/claude" ${USER_TARGETS[@]+"${USER_TARGETS[@]}"} \
+        || CRED_MOUNTS+=(-v "$HOME/.claude:/mnt/claude")
+      if ! target_declared "/mnt/claude-credentials.json" ${USER_TARGETS[@]+"${USER_TARGETS[@]}"}; then
+        CRED_MOUNTS+=(-v "$HOME/.claude/claude-credentials.json:/mnt/claude-credentials.json")
+        NEEDS_CRED_PREP=1
+      fi
+      ;;
+    *)
+      if ! target_declared "/mnt/claude" ${USER_TARGETS[@]+"${USER_TARGETS[@]}"}; then
+        CRED_MOUNTS+=(-v "$HOME/.claude:/mnt/claude")
+        NEEDS_CRED_PREP=1
+      fi
+      ;;
+  esac
+
+  local -a EXTRA_MOUNTS=(${CRED_MOUNTS[@]+"${CRED_MOUNTS[@]}"} ${USER_MOUNTS[@]+"${USER_MOUNTS[@]}"})
 
   local DOCKER_CMD=(docker run --rm -e "APP_UID=$(id -u)" -v "$REPO_DIR:/project")
   DOCKER_CMD+=(${VENV_MOUNT[@]+"${VENV_MOUNT[@]}"})
@@ -161,6 +279,16 @@ adapter_ralphex() {
     printf '%q ' "${DOCKER_CMD[@]}"
     printf '\n'
     exit 0
+  fi
+
+  # Only now, past the dry-run exit: credential preparation is a side effect and must
+  # not happen while merely printing the command.
+  #
+  # NEEDS_CRED_PREP was set during mount assembly: 1 when our default credential mount
+  # survived (user did not override the platform-specific target), 0 when the user owns
+  # that target and their setup provides the file.
+  if [ "$NEEDS_CRED_PREP" = "1" ]; then
+    ralphex_prepare_credentials || return 1
   fi
 
   begin_run

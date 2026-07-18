@@ -71,8 +71,13 @@ executor_options:                  # optional; every key has a default
   image: ghcr.io/umputun/ralphex:latest
   idle_timeout: 10m
   pre_run_hook: ""                 # optional host command run before the executor (best-effort)
-  mounts:                          # optional extra host mounts (src:dst)
-    - ~/.claude:/mnt/claude
+  mounts:                          # optional extra host mounts (src:dst[:options])
+                                   # For ralphex: credential mounts (~/.claude and, on macOS,
+                                   # ~/.claude/claude-credentials.json) are added automatically
+                                   # before each run — no need to list them here. Use mounts for
+                                   # additional paths only (~/.gitconfig, ~/.codex, ~/.config/ralphex,
+                                   # etc.). A user-declared mount to a credential target overrides the
+                                   # automatic one and disables the corresponding auto-preparation.
     - ~/.codex:/mnt/codex
   venv_cache: ~/.cache/crosscut-venv
   runs_dir: ~/.cache/crosscut-runs   # base of <runs_dir>/<repo>/<slug>/<run_id>/ run records
