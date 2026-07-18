@@ -194,8 +194,8 @@ ralphex_prepare_credentials() {
 }
 ```
 
-Запись идёт через `.tmp` + `mv`, чтобы параллельный прогон не прочитал файл на середине
-записи.
+Запись идёт через уникальный `mktemp` + `mv`, чтобы параллельный прогон не прочитал файл
+на середине записи и чтобы два прогона не подрались за общее временное имя.
 
 ---
 
@@ -286,11 +286,14 @@ ralphex_prepare_credentials() {
 ```bash
 # Container target of a "src:target[:options]" mount spec.
 #
-# The second colon-separated field, always. Docker's short -v syntax splits the spec on
-# colons into two or three fields, which means a path containing a colon cannot be
-# expressed with -v at all (that is what --mount exists for). So there is no ambiguity
-# to resolve here: field 2 is the target, and any cleverer right-hand parsing would be
-# solving a problem the syntax cannot produce.
+# The second colon-separated field. executor_options.mounts is documented as
+# "src:target[:options]", and within that format -v splits on colons into two or three
+# fields — so a source path containing a colon is not expressible at all (that is what
+# --mount exists for) and field 2 is unambiguously the target.
+#
+# Scope note: this does NOT hold for every -v form docker accepts. "-v /container/cache"
+# declares an anonymous volume whose target is field 1. crosscut does not support that
+# form in executor_options.mounts; if it ever does, this function must be revisited.
 mount_target() {
   printf '%s\n' "$1" | cut -d: -f2
 }
@@ -316,11 +319,27 @@ target_declared() {
   # Only now, past the dry-run exit: preparing credentials is a side effect and must
   # not happen while merely printing the command.
   #
-  # Skipped when the user declares their own mount at the credential target: their
-  # setup (often a pre_run_hook that writes that file) owns the credentials, and
-  # demanding ours on top would break a config that works today.
-  if ! target_declared "/mnt/claude-credentials.json" ${USER_TARGETS[@]+"${USER_TARGETS[@]}"} \
-     && ! target_declared "/mnt/claude" ${USER_TARGETS[@]+"${USER_TARGETS[@]}"}; then
+  # The rule is per-target, not "the user touched credentials somewhere": preparation
+  # is owed exactly when OUR default mount for the extracted file survived dedup. If
+  # the user redeclared /mnt/claude-credentials.json, their source is mounted and their
+  # setup (often a pre_run_hook writing that file) owns it — extracting on top would
+  # break a config that works today.
+  #
+  # Checking the wrong target would be worse than not checking: a user who only
+  # overrides /mnt/claude on macOS would silently disable the Keychain extraction while
+  # the default /mnt/claude-credentials.json mount stays in the command, pointing at a
+  # file that may not exist. Docker then creates a DIRECTORY at that path, the image's
+  # "[ -f /mnt/claude-credentials.json ]" test fails, and we are back to
+  # "Not logged in" — with one more layer of indirection hiding why.
+  #
+  # Which target carries the credentials differs by platform, so the check does too.
+  local cred_target
+  case "${CROSSCUT_UNAME:-$(uname -s)}" in
+    Darwin) cred_target="/mnt/claude-credentials.json" ;;   # the extracted file
+    *)      cred_target="/mnt/claude" ;;                     # the ~/.claude directory
+  esac
+
+  if ! target_declared "$cred_target" ${USER_TARGETS[@]+"${USER_TARGETS[@]}"}; then
     ralphex_prepare_credentials >/dev/null || return 1
   fi
 ```
@@ -408,6 +427,15 @@ ralphex (в том числе на точный состав `docker run`). Но
    `/tmp/mycreds:/mnt/claude-credentials.json`, `CROSSCUT_UNAME=Darwin`, `security`
    подменён заглушкой → прогон не требует Keychain, заглушка не вызывалась, в команде
    стоит пользовательский источник.
+7a. **Переопределение чужой цели авто-подготовку НЕ отключает.** `CROSSCUT_UNAME=Darwin`,
+   `mounts` содержит только `/tmp/mydir:/mnt/claude` → заглушка `security` **вызвана**,
+   файл кредов создан. Это защита от тихой поломки: иначе дефолтное монтирование
+   `/mnt/claude-credentials.json` осталось бы в команде, указывая на несуществующий
+   файл, а Docker создал бы на его месте каталог.
+7b. **Linux: переопределение `/mnt/claude` отключает проверку.** `CROSSCUT_UNAME=Linux`,
+   `HOME` без `~/.claude/.credentials.json`, `mounts` содержит
+   `/tmp/mydir:/mnt/claude` → прогон **не** падает с «кредов нет»: пользователь
+   смонтировал свой каталог, и требовать наш файл поверх нечего.
 8. **Darwin-ветка извлекает и защищает.** `CROSSCUT_UNAME=Darwin`, заглушка `security`
    печатает маркер, без dry-run → файл создан с правами `600`, маркера нет ни в stdout,
    ни в stderr.
