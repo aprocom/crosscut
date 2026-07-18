@@ -36,3 +36,6 @@ docs/plans/reviews/
 # Loaded by check-no-pii.sh in addition to the tracked pii-patterns.txt;
 # must never be published (that's the whole point).
 pii-patterns.local.txt
+
+# superpowers spec/plan artifacts — kept on disk, not tracked (see .superpowers/ above)
+docs/superpowers/
