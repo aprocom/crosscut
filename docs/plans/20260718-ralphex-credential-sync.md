@@ -283,18 +283,47 @@ ralphex_prepare_credentials() {
 Разбор цели вынести в функцию, потому что `cut -d: -f2` неверен для путей с двоеточием:
 
 ```bash
-# Container target of a "src:target[:mode]" mount spec.
+# Container target of a "src:target[:options]" mount spec.
 #
-# Parsed from the RIGHT: a source path may itself contain a colon, but the trailing
-# mode (ro/rw) and the target never do. cut -d: -f2 would mis-parse such a path and
-# silently produce a wrong dedup key.
+# Parsed from the RIGHT: a source path may itself contain a colon, so cut -d: -f2
+# would silently produce a wrong dedup key.
+#
+# The trailing field is treated as options only when EVERY comma-separated token is a
+# known Docker bind option. A blanket "strip the last field" would turn
+# "/src:/mnt/claude-credentials.json:cached" into target "cached", and a hardcoded
+# ro|rw list would mis-handle the same case by not stripping it at all.
 mount_target() {
-  local spec="$1" last
+  local spec="$1" last tok is_opts=1
   last="${spec##*:}"
-  case "$last" in
-    ro|rw|z|Z|ro,z|rw,z) spec="${spec%:*}" ;;
-  esac
+  if [ "$last" = "$spec" ]; then
+    # No colon at all — malformed spec; hand it back unchanged rather than guess.
+    printf '%s\n' "$spec"
+    return 0
+  fi
+  # tr instead of IFS=, so the caller's IFS is left alone.
+  for tok in $(printf '%s' "$last" | tr ',' ' '); do
+    case "$tok" in
+      ro|rw|z|Z|cached|delegated|consistent|nocopy) ;;
+      rprivate|private|rshared|shared|rslave|slave) ;;
+      *) is_opts=0; break ;;
+    esac
+  done
+  [ "$is_opts" = "1" ] && spec="${spec%:*}"
   printf '%s\n' "${spec##*:}"
+}
+
+# 0 when <needle> is among the remaining arguments.
+#
+# set -u safe by contract: callers pass arrays as ${arr[@]+"${arr[@]}"}, so an empty
+# array expands to no arguments at all rather than to an empty string.
+target_declared() {
+  local needle="$1"
+  shift
+  local t
+  for t in "$@"; do
+    [ "$t" = "$needle" ] && return 0
+  done
+  return 1
 }
 ```
 
@@ -312,8 +341,6 @@ mount_target() {
     ralphex_prepare_credentials >/dev/null || return 1
   fi
 ```
-
-где `target_declared <needle> [targets...]` возвращает 0, если цель есть в списке.
 
 Отказ подготовки останавливает прогон **до** `begin_run` — незачем заводить каталог
 прогона и `running.json` для запуска, который заведомо не состоится.
@@ -401,8 +428,19 @@ ralphex (в том числе на точный состав `docker run`). Но
 8. **Darwin-ветка извлекает и защищает.** `CROSSCUT_UNAME=Darwin`, заглушка `security`
    печатает маркер, без dry-run → файл создан с правами `600`, маркера нет ни в stdout,
    ни в stderr.
-9. **Путь с двоеточием разбирается верно.** `mount_target '/tmp/a:b/c:/mnt/x:ro'` даёт
-   `/mnt/x` — проверка, что разбор идёт справа, а не через `cut -d: -f2`.
+9. **Разбор цели.** Прогнать `mount_target` на четырёх входах:
+   `/tmp/a:b/c:/mnt/x:ro` → `/mnt/x` (двоеточие в источнике, разбор справа);
+   `/src:/mnt/creds.json:cached` → `/mnt/creds.json` (опция, не входящая в ro/rw);
+   `/src:/mnt/x:rw,z` → `/mnt/x` (составные опции);
+   `/src:/mnt/backup:2026` → `/mnt/backup:2026` (последнее поле — часть цели, не опция).
+
+**Что нужно тестам 4, 7, 8 (не dry-run).** Они доходят до кода после сборки команды,
+поэтому фикстура-репозиторий должна иметь **хотя бы один коммит** — иначе прогон упрётся
+в `git rev-parse HEAD`, и тест упадёт не по той причине, по которой задуман. Текущий
+`setup()` в `tests/run-executor.bats` репозиторий не коммитит, так что для новых тестов
+нужна своя фикстура: `git init` + пустой коммит. Тест 7 дополнительно требует заглушки
+`docker` в `PATH` (прогон не должен упереться в настоящий Docker); тесты 4 и 8 до Docker
+не доходят — 4 падает раньше, 8 проверяет только факт создания файла.
 
 Тесты 5 и 8 — не формальность: это единственные проверки, которые поймают случайное
 `echo "$CRED_FILE_CONTENTS"` при будущих правках.
