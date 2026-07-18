@@ -44,6 +44,40 @@ Requirements:
   plan is actually executed (a manual-run needs none).
 - The image (`executor_options.image`) must be pullable — `docker run --rm ... "$IMAGE" ...`
   will pull it implicitly if it isn't already local.
+- **`claude /login` must have been run on the host** — the container needs credentials
+  to authenticate as Claude Code, and the adapter reads them from the host before each
+  run (see "Credentials" below).
+
+### Credentials
+
+`run-executor.sh` prepares and mounts Claude credentials automatically before each
+`ralphex` run. The container reads them from two paths (see its `/srv/init.sh`):
+
+- `/mnt/claude` — the `~/.claude` directory, mounted on every platform.
+- `/mnt/claude-credentials.json` — the extracted credential file, mounted on macOS
+  only, where credentials live in the Keychain rather than on disk.
+
+Platform behaviour:
+
+- **Linux** — `~/.claude/.credentials.json` is written directly by Claude Code.
+  Mounting `~/.claude` is sufficient; no separate file is needed.
+- **macOS** — credentials live in the Keychain. Before each run the adapter extracts
+  them via `security find-generic-password -s "Claude Code-credentials"` into
+  `~/.claude/claude-credentials.json` (mode `600`) and mounts that file separately at
+  `/mnt/claude-credentials.json`. The file persists between runs by design: deleting it
+  after each run would race with parallel runs against other repos. If this is
+  unacceptable, use the `codex` executor instead (it runs on the host without a
+  container).
+
+Both mounts are added automatically. You do **not** need to list them in
+`executor_options.mounts`. If you declare a mount whose container target is the
+same as one of the automatic credential mounts, your declaration wins (last-declared
+wins; deduplication by container target) and the automatic preparation for that target
+is disabled — an existing manual credential setup continues to work unchanged.
+
+If credential preparation fails (Keychain miss, missing `~/.claude/.credentials.json`,
+`security` not found), the run is aborted **before** the run directory is created, with
+a message pointing to `claude /login`.
 
 ## The adapter script (`ralphex` / `codex`)
 
@@ -70,24 +104,32 @@ What it does for the `ralphex` (Docker) kind, in order:
 2. If the repo declares `venv_isolation: true`, creates and mounts
    `<executor_options.venv_cache>/<repo>` at `/project/.venv` in the container (keeps
    the executor's own virtualenv isolated from the host's).
-3. Adds any `executor_options.mounts` entries as extra `-v` mounts (with a leading `~`
-   expanded to `$HOME`).
+3. Assembles credential mounts (`~/.claude:/mnt/claude` and, on macOS,
+   `~/.claude/claude-credentials.json:/mnt/claude-credentials.json`), then appends
+   any `executor_options.mounts` entries (with `~` expanded to `$HOME`). Mounts are
+   deduplicated by container target — last wins — so a user-declared mount to a
+   credential target overrides the automatic one.
 4. Under `EXECUTOR_DRYRUN=1`, prints the assembled `docker run` command and exits
    here — none of the steps below run (see `EXECUTOR_DRYRUN` below).
-5. Acquires the per-repo executor lock; if the repo already has an active executor it
+5. Prepares credentials: on macOS, extracts them from the Keychain into
+   `~/.claude/claude-credentials.json` (mode `600`); on Linux, verifies
+   `~/.claude/.credentials.json` exists. Skipped when the user declared a mount
+   overriding the platform's credential target. Failure aborts the run here, before the
+   run directory is created.
+6. Acquires the per-repo executor lock; if the repo already has an active executor it
    exits 1 without launching (see below). Otherwise it creates a run directory
    `<executor_options.runs_dir>/<repo>/<slug>/<run_id>/` (`<slug>` = the plan filename
    without `.md`; `<run_id>` = `<UTC-timestamp>-<pid>`) and writes `running.json`.
-6. Runs `executor_options.pre_run_hook` if configured — **best-effort**: on failure it
+7. Runs `executor_options.pre_run_hook` if configured — **best-effort**: on failure it
    logs a warning to stderr and the run continues regardless.
-7. Launches the container without an interactive TTY:
+8. Launches the container without an interactive TTY:
    ```
-   docker run --rm -e APP_UID=<uid> -v <repo.path>:/project [venv mount] [extra mounts] \
+   docker run --rm -e APP_UID=<uid> -v <repo.path>:/project [venv mount] [credential mounts] [extra mounts] \
      -w /project <executor_options.image> /srv/ralphex --worktree --branch <slug> \
      --idle-timeout <executor_options.idle_timeout> [extra CLI args passed to run-executor.sh] <plan>
    ```
-8. Writes `executor.log` (stdout) and `stderr.log` (stderr) into the run directory.
-9. Writes `run.json` on completion (contract below), then removes `running.json`.
+9. Writes `executor.log` (stdout) and `stderr.log` (stderr) into the run directory.
+10. Writes `run.json` on completion (contract below), then removes `running.json`.
 
 ### Dispatch and unimplemented-executor messages
 

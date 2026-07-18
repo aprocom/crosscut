@@ -35,11 +35,12 @@ All you need to start:
 That covers planning, acceptance, and merging. The executor (the coding agent
 that writes code for you in step 3) has its own requirements depending on
 which kind you pick — the dependency-light `claude` kind needs neither Docker
-nor a CLI, while `ralphex` needs Docker and `codex` needs the `codex` CLI. If
-none of that is set up yet, that's fine: `/crosscut init` will ask, and if the
-executor you picked can't run when the time comes, driving a plan still
-produces the plan and hands it to you to implement instead (a *manual-run*) —
-more on that in the safety note below.
+nor a CLI, while `ralphex` needs Docker and a completed `claude /login` on the
+host (credentials are read from the host before each run), and `codex` needs
+the `codex` CLI. If none of that is set up yet, that's fine: `/crosscut init`
+will ask, and if the executor you picked can't run when the time comes, driving
+a plan still produces the plan and hands it to you to implement instead (a
+*manual-run*) — more on that in the safety note below.
 
 ## Install
 

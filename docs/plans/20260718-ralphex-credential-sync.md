@@ -358,10 +358,10 @@ target_declared() {
 
 ### Task 3: Пример конфига и документация
 
-- [ ] Update `skills/crosscut/templates/crosscut.config.example.yaml` with credential auto-mount note
-- [ ] Update `docs/executors.md` with credentials subsection for ralphex
-- [ ] Update `docs/getting-started.md` with `claude /login` prerequisite
-- [ ] Update `docs/configuration.md` with auto-mount note for `executor_options.mounts`
+- [x] Update `skills/crosscut/templates/crosscut.config.example.yaml` with credential auto-mount note
+- [x] Update `docs/executors.md` with credentials subsection for ralphex
+- [x] Update `docs/getting-started.md` with `claude /login` prerequisite
+- [x] Update `docs/configuration.md` with auto-mount note for `executor_options.mounts`
 
 **Files:**
 - Modify: `skills/crosscut/templates/crosscut.config.example.yaml`
