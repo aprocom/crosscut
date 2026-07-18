@@ -280,36 +280,19 @@ ralphex_prepare_credentials() {
 Обход массива с конца нужен, чтобы при равных целях выигрывала **последняя** запись
 (пользовательская), а порядок остальных сохранился.
 
-Разбор цели вынести в функцию, потому что `cut -d: -f2` неверен для путей с двоеточием:
+Разбор цели вынести в функцию — не ради хитрого парсинга, а чтобы правило было записано
+в одном месте вместе с обоснованием:
 
 ```bash
 # Container target of a "src:target[:options]" mount spec.
 #
-# Parsed from the RIGHT: a source path may itself contain a colon, so cut -d: -f2
-# would silently produce a wrong dedup key.
-#
-# The trailing field is treated as options only when EVERY comma-separated token is a
-# known Docker bind option. A blanket "strip the last field" would turn
-# "/src:/mnt/claude-credentials.json:cached" into target "cached", and a hardcoded
-# ro|rw list would mis-handle the same case by not stripping it at all.
+# The second colon-separated field, always. Docker's short -v syntax splits the spec on
+# colons into two or three fields, which means a path containing a colon cannot be
+# expressed with -v at all (that is what --mount exists for). So there is no ambiguity
+# to resolve here: field 2 is the target, and any cleverer right-hand parsing would be
+# solving a problem the syntax cannot produce.
 mount_target() {
-  local spec="$1" last tok is_opts=1
-  last="${spec##*:}"
-  if [ "$last" = "$spec" ]; then
-    # No colon at all — malformed spec; hand it back unchanged rather than guess.
-    printf '%s\n' "$spec"
-    return 0
-  fi
-  # tr instead of IFS=, so the caller's IFS is left alone.
-  for tok in $(printf '%s' "$last" | tr ',' ' '); do
-    case "$tok" in
-      ro|rw|z|Z|cached|delegated|consistent|nocopy) ;;
-      rprivate|private|rshared|shared|rslave|slave) ;;
-      *) is_opts=0; break ;;
-    esac
-  done
-  [ "$is_opts" = "1" ] && spec="${spec%:*}"
-  printf '%s\n' "${spec##*:}"
+  printf '%s\n' "$1" | cut -d: -f2
 }
 
 # 0 when <needle> is among the remaining arguments.
@@ -428,11 +411,11 @@ ralphex (в том числе на точный состав `docker run`). Но
 8. **Darwin-ветка извлекает и защищает.** `CROSSCUT_UNAME=Darwin`, заглушка `security`
    печатает маркер, без dry-run → файл создан с правами `600`, маркера нет ни в stdout,
    ни в stderr.
-9. **Разбор цели.** Прогнать `mount_target` на четырёх входах:
-   `/tmp/a:b/c:/mnt/x:ro` → `/mnt/x` (двоеточие в источнике, разбор справа);
-   `/src:/mnt/creds.json:cached` → `/mnt/creds.json` (опция, не входящая в ro/rw);
-   `/src:/mnt/x:rw,z` → `/mnt/x` (составные опции);
-   `/src:/mnt/backup:2026` → `/mnt/backup:2026` (последнее поле — часть цели, не опция).
+9. **Разбор цели.** `mount_target` на трёх входах:
+   `/src:/mnt/x` → `/mnt/x` (две части);
+   `/src:/mnt/x:ro` → `/mnt/x` (с опцией);
+   `/src:/mnt/creds.json:cached` → `/mnt/creds.json` (опция вне набора ro/rw — поле всё
+   равно второе, потому что цель определяется позицией, а не содержимым).
 
 **Что нужно тестам 4, 7, 8 (не dry-run).** Они доходят до кода после сборки команды,
 поэтому фикстура-репозиторий должна иметь **хотя бы один коммит** — иначе прогон упрётся
