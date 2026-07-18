@@ -1,6 +1,6 @@
 ---
 repo: crosscut
-status: todo
+status: validated
 depends_on: []
 feature_id: ralphex-credential-sync
 ---
