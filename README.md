@@ -79,7 +79,8 @@ That's it. Planning, acceptance, and merging all work with just these.
   - **`claude`** — an in-session Claude Code subagent. The dependency-light option:
     needs **neither Docker nor any CLI**, just the Claude Code session you're already in.
   - **`ralphex`** (the default) — the [`ralphex`](https://github.com/umputun/ralphex)
-    reference runner, which runs in **Docker**, so you'd need Docker for it.
+    reference runner, which runs in **Docker** and reads Claude credentials from the
+    host, so you'd need Docker and a completed `claude /login` on the host for it.
   - **`codex`** — runs the **`codex` CLI** against a git worktree (the same account a
     `codex` plan review would use).
 
@@ -156,8 +157,8 @@ your live files, and never pushes** — and the executor always runs, falling ba
 section before wiring it into a project you care about.
 
 - **The executor always runs, but can't run just anywhere.** Which coding agent runs is
-  your choice — `claude` (in-session, no extra tooling), `ralphex` (needs Docker), or
-  `codex` (needs the `codex` CLI). If the one you picked can't run in your environment,
+  your choice — `claude` (in-session, no extra tooling), `ralphex` (needs Docker and
+  a completed `claude /login`), or `codex` (needs the `codex` CLI). If the one you picked can't run in your environment,
   driving a plan produces the plan and hands it to you to implement (a *manual-run*) —
   nothing is auto-written to your repos.
 - **Code is written on a side branch, never your live files.** The executor works in an

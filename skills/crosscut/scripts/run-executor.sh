@@ -152,14 +152,6 @@ target_declared() {
   return 1
 }
 
-# Pure: prints the mount specs credentials need, creating nothing. Safe under dry-run.
-ralphex_credential_paths() {
-  printf '%s\n' "$HOME/.claude:/mnt/claude"
-  case "${CROSSCUT_UNAME:-$(uname -s)}" in
-    Darwin) printf '%s\n' "$HOME/.claude/claude-credentials.json:/mnt/claude-credentials.json" ;;
-  esac
-}
-
 # Prepare Claude credentials for the ralphex container.
 #
 # The ralphex image reads credentials from two places (see its /srv/init.sh):
@@ -192,7 +184,7 @@ ralphex_prepare_credentials() {
       }
       # 600 before anything is written: a plain redirect would briefly leave the secret
       # world-readable under the default umask 022.
-      chmod 600 "$tmp"
+      chmod 600 "$tmp" || { rm -f "$tmp"; echo "run-executor: cannot set permissions on temp file" >&2; return 1; }
 
       # Redirect stderr: a Keychain miss must not leak into logs beyond our own message.
       if ! security find-generic-password -s "Claude Code-credentials" -w \
@@ -209,7 +201,6 @@ ralphex_prepare_credentials() {
         return 1
       }
       mv "$tmp" "$dest"
-      printf '%s\n' "$dest"
       ;;
     *)
       # Linux and friends: Claude Code writes ~/.claude/.credentials.json directly,
@@ -219,7 +210,6 @@ ralphex_prepare_credentials() {
         echo "  Run 'claude /login' on the host, then retry." >&2
         return 1
       }
-      printf '\n'
       ;;
   esac
 }
@@ -242,36 +232,39 @@ adapter_ralphex() {
     VENV_MOUNT=(-v "$VENV_CACHE/$VENV_KEY":/project/.venv)
   fi
 
-  # Credential mounts go first so that a user-declared mount to the same container
-  # target overrides them: an existing manual setup keeps working unchanged.
-  local -a MOUNT_SRC=()
-  while IFS= read -r m; do
-    [ -n "$m" ] || continue
-    MOUNT_SRC+=("$m")
-  done < <(ralphex_credential_paths)
-
+  # Collect user mounts first so credential mounts can defer to any user-declared target.
+  local -a USER_MOUNTS=()
   local -a USER_TARGETS=()
   while IFS= read -r m; do
     [ -n "$m" ] || continue
     m="${m/#\~/$HOME}"
-    MOUNT_SRC+=("$m")
+    USER_MOUNTS+=(-v "$m")
     USER_TARGETS+=("$(mount_target "$m")")
   done < <(cfg_list executor_options.mounts)
 
-  # Deduplicate by container target, last wins (user mounts override credential defaults).
-  local -a EXTRA_MOUNTS=()
-  local -a SEEN_TARGETS=()
-  local i target dup t
-  for (( i=${#MOUNT_SRC[@]}-1 ; i>=0 ; i-- )); do
-    target="$(mount_target "${MOUNT_SRC[$i]}")"
-    dup=0
-    for t in ${SEEN_TARGETS[@]+"${SEEN_TARGETS[@]}"}; do
-      [ "$t" = "$target" ] && { dup=1; break; }
-    done
-    [ "$dup" = "1" ] && continue
-    SEEN_TARGETS+=("$target")
-    EXTRA_MOUNTS=(-v "${MOUNT_SRC[$i]}" ${EXTRA_MOUNTS[@]+"${EXTRA_MOUNTS[@]}"})
-  done
+  # Add credential mounts only when the user has not claimed the same container target.
+  # NEEDS_CRED_PREP=1 when the platform-specific credential target was not overridden,
+  # meaning we own that mount and must prepare the credential file before the run.
+  local -a CRED_MOUNTS=()
+  local NEEDS_CRED_PREP=0
+  case "${CROSSCUT_UNAME:-$(uname -s)}" in
+    Darwin)
+      target_declared "/mnt/claude" ${USER_TARGETS[@]+"${USER_TARGETS[@]}"} \
+        || CRED_MOUNTS+=(-v "$HOME/.claude:/mnt/claude")
+      if ! target_declared "/mnt/claude-credentials.json" ${USER_TARGETS[@]+"${USER_TARGETS[@]}"}; then
+        CRED_MOUNTS+=(-v "$HOME/.claude/claude-credentials.json:/mnt/claude-credentials.json")
+        NEEDS_CRED_PREP=1
+      fi
+      ;;
+    *)
+      if ! target_declared "/mnt/claude" ${USER_TARGETS[@]+"${USER_TARGETS[@]}"}; then
+        CRED_MOUNTS+=(-v "$HOME/.claude:/mnt/claude")
+        NEEDS_CRED_PREP=1
+      fi
+      ;;
+  esac
+
+  local -a EXTRA_MOUNTS=(${CRED_MOUNTS[@]+"${CRED_MOUNTS[@]}"} ${USER_MOUNTS[@]+"${USER_MOUNTS[@]}"})
 
   local DOCKER_CMD=(docker run --rm -e "APP_UID=$(id -u)" -v "$REPO_DIR:/project")
   DOCKER_CMD+=(${VENV_MOUNT[@]+"${VENV_MOUNT[@]}"})
@@ -286,24 +279,14 @@ adapter_ralphex() {
     exit 0
   fi
 
-  # Only now, past the dry-run exit: preparing credentials is a side effect and must
+  # Only now, past the dry-run exit: credential preparation is a side effect and must
   # not happen while merely printing the command.
   #
-  # The rule is per-target, not "the user touched credentials somewhere": preparation
-  # is owed exactly when OUR default mount for the credential file survived dedup. If
-  # the user redeclared the credential target, their source is mounted and their
-  # setup (often a pre_run_hook writing that file) owns it — extracting on top would
-  # break a config that works today.
-  #
-  # Which target carries the credentials differs by platform, so the check does too.
-  local cred_target
-  case "${CROSSCUT_UNAME:-$(uname -s)}" in
-    Darwin) cred_target="/mnt/claude-credentials.json" ;;
-    *)      cred_target="/mnt/claude" ;;
-  esac
-
-  if ! target_declared "$cred_target" ${USER_TARGETS[@]+"${USER_TARGETS[@]}"}; then
-    ralphex_prepare_credentials >/dev/null || return 1
+  # NEEDS_CRED_PREP was set during mount assembly: 1 when our default credential mount
+  # survived (user did not override the platform-specific target), 0 when the user owns
+  # that target and their setup provides the file.
+  if [ "$NEEDS_CRED_PREP" = "1" ]; then
+    ralphex_prepare_credentials || return 1
   fi
 
   begin_run

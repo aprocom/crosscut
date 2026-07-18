@@ -46,8 +46,10 @@ later enabled); a plan_review CLI, e.g. `codex` (only if plan_review is later en
    writes the code*, not a cosmetic knob — then offer `ralphex` (default) / `claude` /
    `codex`:
    - `ralphex` — reference executor; runs in a **Docker** container, backgrounded and
-     tracked via `run.json`/heartbeat. **Warn it needs Docker**; without it `ralphex`
-     falls back to a manual-run flow (the operator implements the plan by hand).
+     tracked via `run.json`/heartbeat. **Warn it needs Docker and a completed
+     `claude /login` on the host** (credentials are read from the host before each run);
+     without either, `ralphex` falls back to a manual-run flow (the operator implements
+     the plan by hand).
    - `codex` — drives the codex CLI in a git worktree cut and removed by the codex
      adapter (`run-executor.sh`), not by the orchestrator.
    - `claude` — runs in-session as a Claude Code subagent (no external CLI or Docker;

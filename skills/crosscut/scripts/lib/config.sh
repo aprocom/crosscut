@@ -329,13 +329,17 @@ _crosscut_lock_owner() {
   printf '%s\n' "$line"
 }
 
-# _crosscut_pid_alive <pid> — true iff a non-empty PID names a live process. Uses
-# `ps -p` rather than `kill -0`: `kill -0` fails with EPERM for a live process owned
-# by another user, misclassifying it as dead; `ps -p` reports existence regardless of
-# owner. Safe under `set -euo pipefail` (only ever the tested command of a conditional).
+# _crosscut_pid_alive <pid> — true iff a non-empty PID names a live process.
+# On Linux, checks /proc/<pid> directly: avoids EPERM (cross-user) and works on
+# BusyBox where `ps -p` is not supported. On macOS (no /proc), falls back to
+# `ps -p` which reports existence regardless of owner.
 _crosscut_pid_alive() {
   [ -n "${1:-}" ] || return 1
-  ps -p "$1" >/dev/null 2>&1
+  if [ -d "/proc" ]; then
+    [ -d "/proc/$1" ]
+  else
+    ps -p "$1" >/dev/null 2>&1
+  fi
 }
 
 # _crosscut_reclaim_stale <lock_dir> — ownership-safe reclaim of a presumed-stale lock via

@@ -83,8 +83,10 @@ Ask the operator **only** for an architecture decision or a blocker (see below).
      same repo is serialized while other repos run in parallel. No `run.json`/heartbeat
      tracking applies to the `claude` path.
    - **Fallback → manual-run**: if the chosen executor cannot run — `executor: ralphex`
-     without Docker, `executor: codex` without the `codex` CLI, or `executor: claude` in
-     an environment with no subagent/Agent capability — present the validated plan to the
+     without Docker or without valid host credentials (`claude /login` not completed or
+     Keychain entry missing on macOS), `executor: codex` without the `codex` CLI, or
+     `executor: claude` in an environment with no subagent/Agent capability — present
+     the validated plan to the
      human operator (path + summary) and ask them to implement it directly. When they
      report the branch is ready, set `status=review_pending` and resume at Phase 5. (No
      `run.json`/heartbeat tracking applies here — the operator is the executor.)

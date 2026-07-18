@@ -83,8 +83,9 @@ EOF
   run env CROSSCUT_UNAME=Linux EXECUTOR_DRYRUN=1 \
     bash "$SCRIPT" --repo repo --plan docs/plans/feat.md
   [ "$status" -eq 0 ]
-  # /mnt/claude appears exactly once in the output
-  count="$(printf '%s\n' "$output" | grep -o '/mnt/claude' | wc -l)"
+  # /mnt/claude appears exactly once in the output (grep on full mount spec avoids
+  # false matches against the /mnt/claude-credentials.json prefix)
+  count="$(printf '%s\n' "$output" | grep -oF "$HOME/.claude:/mnt/claude" | wc -l)"
   [ "$count" -eq 1 ]
   # The source is the user-supplied value (HOME expanded)
   [[ "$output" == *"$HOME/.claude:/mnt/claude"* ]]
@@ -159,7 +160,8 @@ SH
   [ ! -f "$TMP/security_called" ]
   # No credential file created
   [ ! -f "$HOME/.claude/claude-credentials.json" ]
-  # But the darwin cred mount spec appears in the printed command
+  # Both credential mount specs appear in the printed command
+  [[ "$output" == *"$HOME/.claude:/mnt/claude"* ]]
   [[ "$output" == *"/mnt/claude-credentials.json"* ]]
 }
 
@@ -180,6 +182,7 @@ SH
   _write_config "$user_cred:/mnt/claude-credentials.json"
   run env CROSSCUT_UNAME=Darwin \
     bash "$SCRIPT" --repo repo --plan docs/plans/feat.md
+  [ "$status" -eq 0 ]
   # security must NOT have been called (auto-prep was skipped)
   [ ! -f "$TMP/security_called" ]
   # Docker was invoked and executor.log contains the user's cred mount.
@@ -188,6 +191,8 @@ SH
   log="$(find "$TMP/runs" -name executor.log 2>/dev/null | head -1)"
   [ -f "$log" ]
   grep -qF "$user_cred:/mnt/claude-credentials.json" "$log"
+  # The /mnt/claude directory mount must still be present
+  grep -qF "$HOME/.claude:/mnt/claude" "$log"
 }
 
 # --- Test 7a: overriding /mnt/claude does NOT disable Darwin extraction ------
@@ -207,6 +212,7 @@ SH
   _write_config "$user_dir:/mnt/claude"
   run env CROSSCUT_UNAME=Darwin \
     bash "$SCRIPT" --repo repo --plan docs/plans/feat.md
+  [ "$status" -eq 0 ]
   # security MUST have been called
   [ -f "$TMP/security_called" ]
   # The extracted file must exist
@@ -225,8 +231,13 @@ SH
   # Run without DRYRUN: must reach docker without error.
   run env CROSSCUT_UNAME=Linux \
     bash "$SCRIPT" --repo repo --plan docs/plans/feat.md
-  # Should not fail with "claude /login"
+  [ "$status" -eq 0 ]
+  # No credential error
   [[ "$output" != *"claude /login"* ]]
+  # Docker was invoked (run dir created)
+  local log
+  log="$(find "$TMP/runs" -name executor.log 2>/dev/null | head -1)"
+  [ -f "$log" ]
 }
 
 # --- Test 8: Darwin extracts creds, sets 600, no secrets in output ----------
@@ -244,6 +255,7 @@ SH
   _write_config
   run env CROSSCUT_UNAME=Darwin \
     bash "$SCRIPT" --repo repo --plan docs/plans/feat.md
+  [ "$status" -eq 0 ]
 
   # File created
   [ -f "$HOME/.claude/claude-credentials.json" ]
@@ -267,4 +279,39 @@ SH
   [ "$(bash -c "$fn_src; mount_target /src:/mnt/x")" = "/mnt/x" ]
   [ "$(bash -c "$fn_src; mount_target /src:/mnt/x:ro")" = "/mnt/x" ]
   [ "$(bash -c "$fn_src; mount_target /src:/mnt/creds.json:cached")" = "/mnt/creds.json" ]
+}
+
+# --- Test 10: Darwin Keychain miss -------------------------------------------
+
+@test "10: Darwin: Keychain miss aborts run with login hint" {
+  cat > "$TMP/bin/security" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+  chmod +x "$TMP/bin/security"
+  _write_config
+  run env CROSSCUT_UNAME=Darwin \
+    bash "$SCRIPT" --repo repo --plan docs/plans/feat.md
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"claude /login"* ]]
+  # Run dir must not have been created
+  [ ! -d "$TMP/runs/repo/feat" ]
+}
+
+# --- Test 11: Darwin empty credential ----------------------------------------
+
+@test "11: Darwin: empty Keychain entry aborts run" {
+  cat > "$TMP/bin/security" <<'SH'
+#!/usr/bin/env bash
+printf ''
+exit 0
+SH
+  chmod +x "$TMP/bin/security"
+  _write_config
+  run env CROSSCUT_UNAME=Darwin \
+    bash "$SCRIPT" --repo repo --plan docs/plans/feat.md
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"empty credential"* ]]
+  # Run dir must not have been created
+  [ ! -d "$TMP/runs/repo/feat" ]
 }
