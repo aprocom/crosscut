@@ -39,3 +39,8 @@ pii-patterns.local.txt
 
 # superpowers spec/plan artifacts — kept on disk, not tracked (see .superpowers/ above)
 docs/superpowers/
+
+# Claude Code local settings — a per-developer artifact. Also covered by a global
+# ignore on the author machine, but that file is not visible inside the ralphex
+# container, which then sees a dirty tree and refuses to create a worktree.
+.claude/settings.local.json
