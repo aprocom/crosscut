@@ -124,6 +124,42 @@ EOF
   echo "$RUN_DIR/run.json"
 }
 
+# Container target of a "src:target[:options]" mount spec.
+#
+# The second colon-separated field. executor_options.mounts is documented as
+# "src:target[:options]", and within that format -v splits on colons into two or three
+# fields — so a source path containing a colon is not expressible at all (that is what
+# --mount exists for) and field 2 is unambiguously the target.
+#
+# Scope note: this does NOT hold for every -v form docker accepts. "-v /container/cache"
+# declares an anonymous volume whose target is field 1. crosscut does not support that
+# form in executor_options.mounts; if it ever does, this function must be revisited.
+mount_target() {
+  printf '%s\n' "$1" | cut -d: -f2
+}
+
+# 0 when <needle> is among the remaining arguments.
+#
+# set -u safe by contract: callers pass arrays as ${arr[@]+"${arr[@]}"}, so an empty
+# array expands to no arguments at all rather than to an empty string.
+target_declared() {
+  local needle="$1"
+  shift
+  local t
+  for t in "$@"; do
+    [ "$t" = "$needle" ] && return 0
+  done
+  return 1
+}
+
+# Pure: prints the mount specs credentials need, creating nothing. Safe under dry-run.
+ralphex_credential_paths() {
+  printf '%s\n' "$HOME/.claude:/mnt/claude"
+  case "${CROSSCUT_UNAME:-$(uname -s)}" in
+    Darwin) printf '%s\n' "$HOME/.claude/claude-credentials.json:/mnt/claude-credentials.json" ;;
+  esac
+}
+
 # Prepare Claude credentials for the ralphex container.
 #
 # The ralphex image reads credentials from two places (see its /srv/init.sh):
@@ -206,13 +242,36 @@ adapter_ralphex() {
     VENV_MOUNT=(-v "$VENV_CACHE/$VENV_KEY":/project/.venv)
   fi
 
-  # Assemble config-declared extra mounts (executor_options.mounts is a YAML list of "src:dst").
-  local EXTRA_MOUNTS=()
+  # Credential mounts go first so that a user-declared mount to the same container
+  # target overrides them: an existing manual setup keeps working unchanged.
+  local -a MOUNT_SRC=()
+  while IFS= read -r m; do
+    [ -n "$m" ] || continue
+    MOUNT_SRC+=("$m")
+  done < <(ralphex_credential_paths)
+
+  local -a USER_TARGETS=()
   while IFS= read -r m; do
     [ -n "$m" ] || continue
     m="${m/#\~/$HOME}"
-    EXTRA_MOUNTS+=(-v "$m")
+    MOUNT_SRC+=("$m")
+    USER_TARGETS+=("$(mount_target "$m")")
   done < <(cfg_list executor_options.mounts)
+
+  # Deduplicate by container target, last wins (user mounts override credential defaults).
+  local -a EXTRA_MOUNTS=()
+  local -a SEEN_TARGETS=()
+  local i target dup t
+  for (( i=${#MOUNT_SRC[@]}-1 ; i>=0 ; i-- )); do
+    target="$(mount_target "${MOUNT_SRC[$i]}")"
+    dup=0
+    for t in ${SEEN_TARGETS[@]+"${SEEN_TARGETS[@]}"}; do
+      [ "$t" = "$target" ] && { dup=1; break; }
+    done
+    [ "$dup" = "1" ] && continue
+    SEEN_TARGETS+=("$target")
+    EXTRA_MOUNTS=(-v "${MOUNT_SRC[$i]}" ${EXTRA_MOUNTS[@]+"${EXTRA_MOUNTS[@]}"})
+  done
 
   local DOCKER_CMD=(docker run --rm -e "APP_UID=$(id -u)" -v "$REPO_DIR:/project")
   DOCKER_CMD+=(${VENV_MOUNT[@]+"${VENV_MOUNT[@]}"})
@@ -225,6 +284,26 @@ adapter_ralphex() {
     printf '%q ' "${DOCKER_CMD[@]}"
     printf '\n'
     exit 0
+  fi
+
+  # Only now, past the dry-run exit: preparing credentials is a side effect and must
+  # not happen while merely printing the command.
+  #
+  # The rule is per-target, not "the user touched credentials somewhere": preparation
+  # is owed exactly when OUR default mount for the credential file survived dedup. If
+  # the user redeclared the credential target, their source is mounted and their
+  # setup (often a pre_run_hook writing that file) owns it — extracting on top would
+  # break a config that works today.
+  #
+  # Which target carries the credentials differs by platform, so the check does too.
+  local cred_target
+  case "${CROSSCUT_UNAME:-$(uname -s)}" in
+    Darwin) cred_target="/mnt/claude-credentials.json" ;;
+    *)      cred_target="/mnt/claude" ;;
+  esac
+
+  if ! target_declared "$cred_target" ${USER_TARGETS[@]+"${USER_TARGETS[@]}"}; then
+    ralphex_prepare_credentials >/dev/null || return 1
   fi
 
   begin_run
