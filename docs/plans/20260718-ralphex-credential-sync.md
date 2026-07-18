@@ -393,8 +393,8 @@ Docker и выполненный `claude /login`.
 
 ### Task 4: Тесты
 
-- [ ] Create `tests/ralphex-credentials.bats` with all 9 test cases
-- [ ] Update existing ralphex dry-run tests in `tests/run-executor.bats` with credential mount expectations
+- [x] Create `tests/ralphex-credentials.bats` with all 9 test cases
+- [x] Update existing ralphex dry-run tests in `tests/run-executor.bats` with credential mount expectations
 
 **Files:**
 - Create: `tests/ralphex-credentials.bats`

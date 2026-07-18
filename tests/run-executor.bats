@@ -15,13 +15,14 @@ setup() {
 teardown() { rm -rf "$TMP"; }
 
 @test "dryrun prints docker command with resolved image and repo path" {
-  run env EXECUTOR_DRYRUN=1 bash "$SCRIPT" --repo backend --plan docs/plans/x.md
+  run env EXECUTOR_DRYRUN=1 CROSSCUT_UNAME=Linux bash "$SCRIPT" --repo backend --plan docs/plans/x.md
   [ "$status" -eq 0 ]
   [[ "$output" == *"docker run"* ]]
   [[ "$output" == *"ghcr.io/umputun/ralphex:latest"* ]]
   [[ "$output" == *"$TMP/backend"* ]]
   [[ "$output" == *"--worktree"* ]]
   [[ "$output" == *"--branch x"* ]]
+  [[ "$output" == *":/mnt/claude"* ]]
 }
 
 @test "dryrun keeps a space-containing repo path as one token" {
@@ -30,10 +31,11 @@ teardown() { rm -rf "$TMP"; }
   echo "# plan" > "$TMP/back end/docs/plans/x.md"
   export CROSSCUT_CONFIG="$TMP/space.yaml"
   sed "s#__BACKEND__#$TMP/back end#" "$DIR/fixtures/exec.config.template.yaml" > "$CROSSCUT_CONFIG"
-  run env EXECUTOR_DRYRUN=1 bash "$SCRIPT" --repo backend --plan docs/plans/x.md
+  run env EXECUTOR_DRYRUN=1 CROSSCUT_UNAME=Linux bash "$SCRIPT" --repo backend --plan docs/plans/x.md
   [ "$status" -eq 0 ]
   [[ "$output" == *'back\ end:/project'* ]]
   [[ "$output" == *"--worktree"* ]]
+  [[ "$output" == *":/mnt/claude"* ]]
 }
 
 @test "unknown repo errors" {
@@ -409,7 +411,8 @@ repos:
     kind: python
 EOF
   export CROSSCUT_CONFIG="$TMP/no-executor-block.yaml"
-  run env EXECUTOR_DRYRUN=1 bash "$SCRIPT" --repo backend --plan docs/plans/x.md
+  run env EXECUTOR_DRYRUN=1 CROSSCUT_UNAME=Linux bash "$SCRIPT" --repo backend --plan docs/plans/x.md
   [ "$status" -eq 0 ]
   [[ "$output" == *"docker run"* ]]
+  [[ "$output" == *":/mnt/claude"* ]]
 }
