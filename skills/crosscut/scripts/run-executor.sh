@@ -160,8 +160,10 @@ target_declared() {
 #   /mnt/claude-credentials.json       — the macOS path, where credentials live in the
 #                                        Keychain and must be extracted first
 #
-# Prints the path to mount at /mnt/claude-credentials.json, or nothing when the
-# platform needs no separate file. Never prints credential material.
+# Prints nothing on success: mount paths are assembled by the caller, which decides
+# from NEEDS_CRED_PREP whether this function has to run at all. Returns non-zero when
+# credentials cannot be prepared, explaining why on stderr. Never prints credential
+# material on any path.
 ralphex_prepare_credentials() {
   local dest="$HOME/.claude/claude-credentials.json"
 
