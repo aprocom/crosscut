@@ -175,6 +175,42 @@ EOF
   echo "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert any(r["slug"]=="next1" for r in d["ready"]), d["ready"]'
 }
 
+# The template + SKILL.md write the "no dependencies" placeholder as an EM DASH, so a dep-free
+# plan must parse to [] (not to a literal dash that can never resolve) and land in `ready`.
+# EN DASH covers an autocorrect substitution; ASCII hyphen is the hand-edited form.
+@test "no-dependency placeholders parse to [] and are ready" {
+  _roadmap \
+    "| emdash1 | backend | todo | — | - |" \
+    "| endash1 | backend | todo | – | - |" \
+    "| hyphen1 | backend | todo | - | - |"
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json,sys
+d = json.load(sys.stdin)
+plans = {p["slug"]: p for p in d["plans"]}
+ready = {r["slug"] for r in d["ready"]}
+for slug in ("emdash1", "endash1", "hyphen1"):
+    assert plans[slug]["depends_on"] == [], (slug, plans[slug]["depends_on"])
+    assert slug in ready, (slug, d["ready"])
+'
+}
+
+# Exact-token matching, not a prefix test: a slug that legitimately starts with a dash stays
+# a real dependency (and so must NOT be ready while that dependency is unresolved).
+@test "a dependency slug starting with a dash is not treated as a placeholder" {
+  _roadmap "| dashdep1 | backend | todo | -weird-slug | - |"
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  echo "$output" | python3 -c '
+import json,sys
+d = json.load(sys.stdin)
+p = [x for x in d["plans"] if x["slug"] == "dashdep1"][0]
+assert p["depends_on"] == ["-weird-slug"], p["depends_on"]
+assert not any(r["slug"] == "dashdep1" for r in d["ready"]), d["ready"]
+'
+}
+
 @test "--dry-run writes nothing and prunes nothing" {
   git -C "$REPO" checkout -q -b slug1
   echo w > "$REPO/g"; git -C "$REPO" add -A; git -C "$REPO" commit -qm w

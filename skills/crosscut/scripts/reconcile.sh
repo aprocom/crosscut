@@ -346,6 +346,24 @@ def split_row(line):
     inner = s[1:-1] if s.endswith("|") else s[1:]
     return [c.strip() for c in inner.split("|")]
 
+# "no dependencies" markers in a ROADMAP depends_on cell. The template and SKILL.md write an
+# EM DASH; a hand-edited row may carry an ASCII hyphen or an autocorrect-substituted EN DASH.
+# Matching is EXACT-TOKEN (never a prefix test) so a slug that legitimately starts with "-"
+# still parses as a real dependency. `none` is deliberately NOT a marker — it is not a
+# documented placeholder and could be a real slug.
+EMPTY_DEP_MARKERS = frozenset(("", "-", "—", "–"))
+
+def parse_depends_cell(raw):
+    """ROADMAP depends_on cell -> list of dependency slugs, placeholders dropped.
+
+    Normalizing HERE (not at the `ready` comparison) keeps every downstream consumer —
+    ready computation, the JSON summary — seeing a clean slug list.
+    """
+    return [
+        dep for dep in (part.strip() for part in re.split(r'[,\s]+', raw or ""))
+        if dep not in EMPTY_DEP_MARKERS
+    ]
+
 roadmap_lines = []
 have_roadmap = os.path.isfile(roadmap_path)
 if have_roadmap:
@@ -397,7 +415,7 @@ for i, line in enumerate(roadmap_lines):
     di, fi = hmap.get("depends_on"), hmap.get("feature_id")
     dep_raw = cells[di] if (di is not None and di < len(cells)) else ""
     feat = cells[fi] if (fi is not None and fi < len(cells)) else ""
-    deps = [d.strip() for d in re.split(r'[,\s]+', dep_raw) if d.strip() and d.strip() != "-"]
+    deps = parse_depends_cell(dep_raw)
     rows.append({"line_idx": i, "cells": cells, "status_idx": si, "slug": slug, "repo": repo,
                  "status": status, "depends_on": deps, "feature_id": feat})
 
